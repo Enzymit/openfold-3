@@ -218,6 +218,7 @@ class MSAModuleEmbedder(nn.Module):
             c_s_input, c_m, **linear_init_params.linear_s_input
         )
 
+    # TODO: Move this to the data pipeline
     @staticmethod
     def _subsample_main_msa(
         msa_feat: torch.Tensor,
