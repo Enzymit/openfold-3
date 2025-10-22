@@ -1,7 +1,20 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 import random
 import traceback
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -51,7 +64,7 @@ def make_chain_pair_mask_padded(
 class ValidationPDBDataset(BaseOF3Dataset):
     """Validation Dataset class."""
 
-    def __init__(self, dataset_config: dict, world_size: Optional[int] = None) -> None:
+    def __init__(self, dataset_config: dict, world_size: int | None = None) -> None:
         """Initializes a ValidationDataset.
 
         Args:
@@ -102,7 +115,7 @@ class ValidationPDBDataset(BaseOF3Dataset):
         # Get PDB ID from the datapoint cache and the preferred chain/interface
         datapoint = self.datapoint_cache.iloc[index]
         pdb_id = datapoint["pdb_id"]
-        is_repeated_sample = datapoint["repeated_sample"]
+        is_repeated_sample = bool(datapoint["repeated_sample"])
 
         if not self.debug_mode:
             sample_data = self.create_all_features(
@@ -237,7 +250,7 @@ class ValidationPDBDataset(BaseOF3Dataset):
     def create_all_features(
         self,
         pdb_id: str,
-        preferred_chain_or_interface: Optional[str],
+        preferred_chain_or_interface: str | None,
         return_atom_arrays: bool,
         return_crop_strategy: bool,
     ) -> dict:

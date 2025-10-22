@@ -1,3 +1,17 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import math
 import unittest
 
@@ -235,9 +249,7 @@ class TestAtomAttentionEncoder(unittest.TestCase):
 
         num_blocks = math.ceil(n_atom / n_query)
 
-        atom_mask = torch.ones((batch_size, n_atom))
-
-        ai, ql, cl, plm = atom_attn_enc(batch=batch, atom_mask=atom_mask)
+        ai, ql, cl, plm = atom_attn_enc(batch=batch)
 
         self.assertTrue(ai.shape == (batch_size, n_token, c_token))
         self.assertTrue(ql.shape == (batch_size, n_atom, c_atom))
@@ -293,14 +305,12 @@ class TestAtomAttentionEncoder(unittest.TestCase):
         n_atom = batch["ref_pos"].shape[-2]
         num_blocks = math.ceil(n_atom / n_query)
 
-        atom_mask = torch.ones((batch_size, 1, n_atom))
         rl = torch.randn((batch_size, n_sample, n_atom, 3))
         si_trunk = torch.randn((batch_size, 1, n_token, c_s))
         zij_trunk = torch.randn((batch_size, 1, n_token, n_token, c_z))
 
         ai, ql, cl, plm = atom_attn_enc(
             batch=batch,
-            atom_mask=atom_mask,
             rl=rl,
             si_trunk=si_trunk,
             zij_trunk=zij_trunk,
@@ -353,15 +363,12 @@ class TestAtomAttentionDecoder(unittest.TestCase):
         n_atom = batch["ref_pos"].shape[-2]
         num_blocks = math.ceil(n_atom / n_query)
 
-        atom_mask = torch.ones((batch_size, n_atom))
         ai = torch.randn((batch_size, n_token, c_token))
         ql = torch.randn((batch_size, n_atom, c_atom))
         cl = torch.randn((batch_size, n_atom, c_atom))
         plm = torch.randn((batch_size, num_blocks, n_query, n_key, c_atom_pair))
 
-        rl_update = atom_attn_dec(
-            batch=batch, atom_mask=atom_mask, ai=ai, ql=ql, cl=cl, plm=plm
-        )
+        rl_update = atom_attn_dec(batch=batch, ai=ai, ql=ql, cl=cl, plm=plm)
 
         self.assertTrue(rl_update.shape == (batch_size, n_atom, 3))
 
@@ -406,15 +413,12 @@ class TestAtomAttentionDecoder(unittest.TestCase):
         n_atom = batch["ref_pos"].shape[-2]
         num_blocks = math.ceil(n_atom / n_query)
 
-        atom_mask = torch.ones((batch_size, 1, n_atom))
         ai = torch.randn((batch_size, n_sample, n_token, c_token))
         ql = torch.randn((batch_size, n_sample, n_atom, c_atom))
         cl = torch.randn((batch_size, 1, n_atom, c_atom))
         plm = torch.randn((batch_size, 1, num_blocks, n_query, n_key, c_atom_pair))
 
-        rl_update = atom_attn_dec(
-            batch=batch, atom_mask=atom_mask, ai=ai, ql=ql, cl=cl, plm=plm
-        )
+        rl_update = atom_attn_dec(batch=batch, ai=ai, ql=ql, cl=cl, plm=plm)
 
         self.assertTrue(rl_update.shape == (batch_size, n_sample, n_atom, 3))
 

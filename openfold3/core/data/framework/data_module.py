@@ -1,3 +1,17 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """This module contains the DataModule class.
 
 The DataModule is a LightningDataModule class that organizes the
@@ -29,7 +43,7 @@ import dataclasses
 import enum
 import random
 import warnings
-from typing import Any, Optional, Union
+from typing import Any
 
 import pytorch_lightning as pl
 import torch
@@ -80,7 +94,7 @@ class DatasetSpec(BaseModel):
     name: str
     dataset_class: str
     mode: DatasetMode
-    weight: Optional[float] = None
+    weight: float | None = None
     config: SerializeAsAny[BaseModel] = SerializeAsAny()
 
 
@@ -102,7 +116,7 @@ class MultiDatasetConfig:
 
     classes: list[str]
     modes: list[str]
-    configs: list[Union[dict[str, Any], None]]
+    configs: list[dict[str, Any] | None]
     weights: list[float]
 
     def __len__(self):
@@ -121,7 +135,7 @@ class MultiDatasetConfig:
         """
 
         def apply_bool(value, idx):
-            return [v for v, i in zip(value, idx) if i]
+            return [v for v, i in zip(value, idx, strict=True) if i]
 
         return MultiDatasetConfig(
             classes=apply_bool(self.classes, index),
@@ -139,25 +153,25 @@ class DataModuleConfig(BaseModel):
     datasets: list[SerializeAsAny[BaseModel]]
     batch_size: int = 1
     num_workers: int = 0
+    num_workers_validation: int = 0
     data_seed: int = 42
     epoch_len: int = 1
-    num_epochs: int = 1000  # PL default
 
 
 class DataModule(pl.LightningDataModule):
     """A LightningDataModule class for organizing Datasets and DataLoaders."""
 
     def __init__(
-        self, data_module_config: DataModuleConfig, world_size: Optional[int] = None
+        self, data_module_config: DataModuleConfig, world_size: int | None = None
     ) -> None:
         super().__init__()
 
         # Possibly initialize directly from DataModuleConfig
         self.batch_size = data_module_config.batch_size
         self.num_workers = data_module_config.num_workers
+        self.num_workers_validation = data_module_config.num_workers_validation
         self.data_seed = data_module_config.data_seed
         self.epoch_len = data_module_config.epoch_len
-        self.num_epochs = data_module_config.num_epochs
         self.world_size = world_size
 
         # Parse datasets
@@ -174,7 +188,7 @@ class DataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         # Custom worker init function with manual data seed
         def worker_init_function_with_data_seed(
-            worker_id: int, rank: Optional[int] = None
+            worker_id: int, rank: int | None = None
         ) -> None:
             """Modified default Lightning worker_init_fn with manual data seed.
 
@@ -224,7 +238,6 @@ class DataModule(pl.LightningDataModule):
                 datasets=all_train_datasets,
                 dataset_probabilities=multi_dataset_config_train.weights,
                 epoch_len=self.epoch_len,
-                num_epochs=self.num_epochs,
                 generator=self.generator,
                 next_dataset_indices=self.next_dataset_indices,
             )
@@ -287,26 +300,12 @@ class DataModule(pl.LightningDataModule):
 
         return multi_dataset_config
 
-    @staticmethod
-    def run_checks(multi_dataset_config: MultiDatasetConfig) -> None:
-        """Runs checks on the provided crop weights and modes.
-
-        Checks for valid combinations of SingleDataset modes and normalizes weights and
-        cropping weights if available, and they do not sum to 1. Updates
-        multi_dataset_config in place.
-
-        Args:
-            multi_dataset_config: DatasetConfig:
-                Parsed dataset config.
-
-        Returns:
-            None.
-        """
-
-        # Check if provided weights sum to 1
-        train_dataset_config = multi_dataset_config.get_subset(
-            [mode == DatasetMode.train for mode in multi_dataset_config.modes]
-        )
+    @classmethod
+    def run_training_dataset_checks(
+        cls,
+        train_dataset_config: MultiDatasetConfig,
+    ) -> None:
+        """Check that dataset weights and crop weights are normalized"""
         if sum(train_dataset_config.weights) != 1:
             warnings.warn(
                 "Dataset weights do not sum to 1. Normalizing weights.",
@@ -331,6 +330,29 @@ class DataModule(pl.LightningDataModule):
                     for key, value in config_i_crop_weights.items()
                 }
                 print(f"{train_dataset_config.configs[idx].crop.crop_weights=}")
+
+    @classmethod
+    def run_checks(cls, multi_dataset_config: MultiDatasetConfig) -> None:
+        """Runs checks on the provided crop weights and modes.
+
+        Checks for valid combinations of SingleDataset modes and normalizes weights and
+        cropping weights if available, and they do not sum to 1. Updates
+        multi_dataset_config in place.
+
+        Args:
+            multi_dataset_config: DatasetConfig:
+                Parsed dataset config.
+
+        Returns:
+            None.
+        """
+
+        # Check if provided weights sum to 1
+        train_dataset_config = multi_dataset_config.get_subset(
+            [mode == DatasetMode.train for mode in multi_dataset_config.modes]
+        )
+        if len(train_dataset_config.classes):
+            cls.run_training_dataset_checks(train_dataset_config)
 
         # Check if provided dataset mode combination is valid
         modes = multi_dataset_config.modes
@@ -379,6 +401,7 @@ class DataModule(pl.LightningDataModule):
         for dataset_class, dataset_config in zip(
             multi_dataset_config.classes,
             multi_dataset_config.configs,
+            strict=True,
         ):
             if set_world_size:
                 dataset = DATASET_REGISTRY[dataset_class](
@@ -399,10 +422,22 @@ class DataModule(pl.LightningDataModule):
         Returns:
             DataLoader: DataLoader object.
         """
+
+        # TODO: Val does not need this many workers. Due to memory leak issue,
+        #  reduce workers here to run with more workers overall in training
+        #  as temporary quick fix.
+        if (
+            mode == DatasetMode.validation
+            and DatasetMode.train in self.multi_dataset_config.modes
+        ):
+            num_workers = self.num_workers_validation
+        else:
+            num_workers = self.num_workers
+
         return DataLoader(
             dataset=self.datasets_by_mode[mode],
             batch_size=self.batch_size,
-            num_workers=self.num_workers,
+            num_workers=num_workers,
             collate_fn=openfold_batch_collator,
             generator=self.generator,
             worker_init_fn=self.worker_init_function_with_data_seed,
@@ -490,7 +525,7 @@ class InferenceDataModule(DataModule):
         if self.use_templates:
             template_preprocessor = TemplatePreprocessor(
                 input_set=self.inference_config.query_set,
-                config=self.inference_config.template_preprocessor,
+                config=self.inference_config.template_preprocessor_settings,
             )
             template_preprocessor()
 

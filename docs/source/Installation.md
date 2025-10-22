@@ -42,22 +42,83 @@ $ mamba env create -n openfold_env -f environments/production.yml
 **Note:** You’ll need to have mamba installed; see the [mamba documentation](https://mamba.readthedocs.io/en/latest/) if needed.
 
 
-### Known Issue: rdkit Conflict
+## Downloading OpenFold3 model parameters
 
-Due to a conflict between `pip` dependencies and `conda` dependencies, `rdkit=2025` may be installed incorrectly.
+### Easiest: Use `./scripts/setup_openfold3.sh` to download and setup default parameter paths
 
-You can check with:
+The [`setup_openfold3.sh`](../scripts/setup_openfold3.sh) script sets up quick defaults for parameter paths and saves selected paths as default variables. 
+
+In detail, this script will:
+- Setup an `$OPENFOLD_CACHE` environment [Optional, default: `~/.openfold3`]
+- Setup a directory for OpenFold3 model parameters [default: `~/.openfold3`]
+    - Writes the path to `$OPENFOLD_CACHE/ckpt_path` 
+- Download the model parameters, if the parameter file does not already exist 
+- Runs an inference integration test on two samples, without MSA alignments (~5 min on A100)
+
+We recommend running this script as a one-stop script to download parameters and verify your installation.
+
+### Downloading the model parameters manually
+
+The model parameters (~5GB) for the trained OpenFold3 model can be downloaded from [our AWS RODA bucket](https://registry.opendata.aws/openfold/) with the following script:
+
 ```
-$ mamba list | grep rdkit
+./scripts/download_openfold_params.sh
 ```
 
-If you see something like:
+By default, these weights will be downloaded to `~/.openfold3/`. 
+You can customize the download directory by providing your own download directory as follows.
+
 ```
-librdkit   2025.03.1     h84b0b3c_0     conda-forge
-rdkit      2023.9.6      pypi_0         pypi
+./scripts/download_openfold_params.sh --download_dir=<target-dir>
 ```
-You’ll need to correct this by removing the pip version and installing the correct conda package:
+
+### Setting OpenFold3 Cache environment variable
+You can optionally set your OpenFold3 Cache path as an environment variable:
+
 ```
-pip uninstall rdkit
-mamba install rdkit
+export OPENFOLD_CACHE=`/<custom-dir>/.openfold3/`
+```
+
+This can be used to provide some default paths for model parameters (see section below).
+
+### Where does OpenFold3 look for model parameters? 
+
+OpenFold3 looks for parameters in the following order:
+1. Use `inference_ckpt_path` that the user provides either as a command line argument or in the `experiment_settings.inference_ckpt_path` section in `runner.yml`
+2. If the `$OPENFOLD_CACHE` value is set, either in the `runner.yml` under `experiment_settings.cache_path`, `$OPENFOLD_CACHE/ckpt_root` will be used
+    - If no `$OPENFOLD_CACHE/ckpt_root` file is set, will attempt to download the parameters to `$OPENFOLD_CACHE` (and write `ckpt_root` file storing the cache)
+3. If no `$OPENFOLD_CACHE` value is set, attempts to download the parameters to `~/.openfold3`.
+
+
+## Running OpenFold Tests
+
+OpenFold tests require the additional packages listed in `environments/development.txt`
+
+These packages can be installed via the following steps:
+
+1. Activate your Openfold mamba environment, e.g.
+```
+$ mamba activate openfold_env
+```
+
+2. Use `pip` to install the development dependencies 
+```
+$ pip install environments/development.txt
+```
+
+To run the tests, you may use `pytest`, e.g.
+```
+$ pytest tests/
+```
+
+To run the inference verification tests, run:
+```
+$ pytest tests/ -m "inference_verification"
+```
+
+Note: To build deepspeed, it may be necessary to include the environment `$LD_LIBRARY_PATH` and `$LIBRARY_PATH`, which can be done via the following
+
+```
+export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 ```

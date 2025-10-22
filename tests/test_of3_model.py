@@ -1,3 +1,17 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import pytest
 import torch
 
@@ -45,7 +59,7 @@ class TestOF3Model:
         )
         config.architecture.loss_module.diffusion.chunk_size = 16
 
-        of3 = OpenFold3AllAtom(config, _compile=False).to(device=device, dtype=dtype)
+        of3 = OpenFold3AllAtom(config).to(device=device, dtype=dtype)
         of3_loss = OpenFold3Loss(config=config.architecture.loss_module)
 
         batch = random_of3_features(
@@ -161,9 +175,7 @@ class TestOF3Model:
             use_deepspeed_evo_attention=True,
         )
 
-    @pytest.mark.skip(
-        reason="Manually enable this for now, will add flag to run slow tests later."
-    )
+    @pytest.mark.slow
     @compare_utils.skip_unless_triton_installed()
     @compare_utils.skip_unless_cuda_available()
     @pytest.mark.parametrize(

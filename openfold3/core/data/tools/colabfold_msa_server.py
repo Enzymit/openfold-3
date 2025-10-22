@@ -1,3 +1,17 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import json
 import logging
 import os
@@ -700,7 +714,9 @@ class ColabFoldQueryRunner:
         )
         m_with_templates = set(template_alignments[0])
 
-        for rep_id, aln in zip(self.colabfold_mapper.rep_ids, a3m_lines_main):
+        for rep_id, aln in zip(
+            self.colabfold_mapper.rep_ids, a3m_lines_main, strict=False
+        ):
             rep_dir = main_alignments_path / str(rep_id)
             template_rep_dir = template_alignments_path / str(rep_id)
 
@@ -766,7 +782,7 @@ class ColabFoldQueryRunner:
             # TODO: process the returned MSAs - save per representative ID
             complex_directory = paired_alignments_directory / str(complex_group.rep_id)
             complex_directory.mkdir(parents=True, exist_ok=True)
-            for seq, aln in zip(complex_group, a3m_lines_paired):
+            for seq, aln in zip(complex_group, a3m_lines_paired, strict=True):
                 rep_dir = complex_directory / str(get_sequence_hash(seq))
 
                 # If save as a3m...

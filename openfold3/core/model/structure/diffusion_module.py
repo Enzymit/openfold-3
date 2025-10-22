@@ -1,3 +1,4 @@
+# Copyright 2025 AlQuraishi Laboratory
 # Copyright 2021 DeepMind Technologies Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,8 +17,6 @@
 Diffusion module. Implements the algorithms in section 3.7 of the
 Supplementary Information.
 """
-
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -173,8 +172,9 @@ class DiffusionModule(nn.Module):
         si_input: torch.Tensor,
         si_trunk: torch.Tensor,
         zij_trunk: torch.Tensor,
-        chunk_size: Optional[int] = None,
+        chunk_size: int | None = None,
         use_deepspeed_evo_attention: bool = False,
+        use_cueq_triangle_kernels: bool = False,
         use_lma: bool = False,
         use_high_precision_attention: bool = False,
         _mask_trans: bool = True,
@@ -188,7 +188,9 @@ class DiffusionModule(nn.Module):
             token_mask:
                 [*, N_token] Token mask
             atom_mask:
-                [*, N_atom] Atom mask
+                [*, N_atom] Atom mask. In the training step this is the
+                ground truth mask, but in the mini/full rollout this is
+                the padding mask.
             t:
                 [*] Noise level at a diffusion step
             si_input:
@@ -211,20 +213,25 @@ class DiffusionModule(nn.Module):
             [*, N_atom, 3] Denoised atom positions
         """
         si, zij = self.diffusion_conditioning(
-            batch=batch, t=t, si_input=si_input, si_trunk=si_trunk, zij_trunk=zij_trunk
+            batch=batch,
+            t=t,
+            si_input=si_input,
+            si_trunk=si_trunk,
+            zij_trunk=zij_trunk,
+            chunk_size=chunk_size,
         )
 
         xl_noisy = xl_noisy * atom_mask[..., None]
 
         rl_noisy = xl_noisy / torch.sqrt(t[..., None, None] ** 2 + self.sigma_data**2)
 
+        # Note: These modules are not memory-intensive compared to other parts of the
+        # model (i.e. TemplateStack) so chunking is unnecessary for now.
         ai, ql, cl, plm = self.atom_attn_enc(
             batch=batch,
-            atom_mask=atom_mask,
             rl=rl_noisy,
             si_trunk=si_trunk,
             zij_trunk=zij,  # Use conditioned trunk representation
-            chunk_size=chunk_size,
             use_high_precision_attention=use_high_precision_attention,
         )
 
@@ -235,8 +242,8 @@ class DiffusionModule(nn.Module):
             s=si,
             z=zij,
             mask=token_mask,
-            chunk_size=chunk_size,
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+            use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_lma=use_lma,
             use_high_precision_attention=use_high_precision_attention,
             _mask_trans=_mask_trans,
@@ -246,12 +253,10 @@ class DiffusionModule(nn.Module):
 
         rl_update = self.atom_attn_dec(
             batch=batch,
-            atom_mask=atom_mask,
             ai=ai,
             ql=ql,
             cl=cl,
             plm=plm,
-            chunk_size=chunk_size,
             use_high_precision_attention=use_high_precision_attention,
         )
 
@@ -311,8 +316,9 @@ class SampleDiffusion(nn.Module):
         zij_trunk: torch.Tensor,
         noise_schedule: torch.Tensor,
         no_rollout_samples: int,
-        chunk_size: Optional[int] = None,
+        chunk_size: int | None = None,
         use_deepspeed_evo_attention: bool = False,
+        use_cueq_triangle_kernels: bool = False,
         use_lma: bool = False,
         use_high_precision_attention: bool = False,
         _mask_trans: bool = True,
@@ -379,6 +385,7 @@ class SampleDiffusion(nn.Module):
                 zij_trunk=zij_trunk,
                 chunk_size=chunk_size,
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_lma=use_lma,
                 use_high_precision_attention=use_high_precision_attention,
                 _mask_trans=_mask_trans,

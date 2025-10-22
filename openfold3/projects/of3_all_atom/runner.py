@@ -1,21 +1,34 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import gc
 import importlib
 import itertools
 import logging
+import traceback
+from contextlib import nullcontext
+from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
+import torch.distributed as dist
 from torchmetrics import MeanMetric, MetricCollection, PearsonCorrCoef
 
 from openfold3.core.loss.loss_module import OpenFold3Loss
-from openfold3.core.metrics.confidence import (
-    compute_global_predicted_distance_error,
-    compute_plddt,
-    compute_predicted_aligned_error,
-    compute_predicted_distance_error,
-    compute_weighted_ptm,
-)
+from openfold3.core.metrics.aggregate_confidence_ranking import get_confidence_scores
 from openfold3.core.metrics.model_selection import (
     compute_final_model_selection_metric,
     compute_valid_model_selection_metrics,
@@ -25,9 +38,9 @@ from openfold3.core.metrics.validation_all_atom import (
     get_metrics_chunked,
 )
 from openfold3.core.runners.model_runner import ModelRunner
-from openfold3.core.utils.atomize_utils import get_token_frame_atoms
 from openfold3.core.utils.lr_schedulers import AlphaFoldLRScheduler
 from openfold3.core.utils.tensor_utils import tensor_tree_map
+from openfold3.core.utils.timing import PerformanceTimer
 from openfold3.projects.of3_all_atom.config.model_config import (
     model_selection_metric_weights_config,
 )
@@ -42,6 +55,7 @@ from openfold3.projects.of3_all_atom.model import OpenFold3
 
 deepspeed_is_installed = importlib.util.find_spec("deepspeed") is not None
 if deepspeed_is_installed:
+    import deepspeed
     from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 logger = logging.getLogger(__name__)
@@ -50,22 +64,49 @@ REFERENCE_CONFIG_PATH = Path(__file__).parent.resolve() / "config/reference_conf
 
 
 class OpenFold3AllAtom(ModelRunner):
-    def __init__(self, model_config, _compile=True):
-        super().__init__(model_class=OpenFold3, config=model_config, _compile=_compile)
+    def __init__(self, model_config, log_dir: Path = None):
+        super().__init__(model_class=OpenFold3, config=model_config)
 
-        self.loss = (
-            torch.compile(OpenFold3Loss(config=model_config.architecture.loss_module))
-            if _compile
-            else OpenFold3Loss(config=model_config.architecture.loss_module)
-        )
+        self.log_dir = log_dir
+
+        self.loss = OpenFold3Loss(config=model_config.architecture.loss_module)
 
         self.model_selection_weights = model_selection_metric_weights_config[
             self.config.settings.model_selection_weight_scheme
         ]
 
+        self.per_sample_grad_clipping = (
+            model_config.settings.gradient_clipping.per_sample_clipping
+        )
+        self.max_grad_norm = model_config.settings.gradient_clipping.clip_val
+        self.automatic_optimization = not self.per_sample_grad_clipping
+
+    def setup(self, stage: str):
+        # Setup metrics
         self._setup_train_metrics()
         self._setup_val_metrics()
         self._init_metric_enabled_tracker()
+
+        # Keep grads enabled for confidence head parameters only
+        if stage == "fit" and self.config.settings.train_confidence_only:
+            exempt_submodule = [
+                self.model.aux_heads.pairformer_embedding,
+                self.model.aux_heads.pde,
+                self.model.aux_heads.plddt,
+                self.model.aux_heads.experimentally_resolved,
+                self.model.aux_heads.pae,
+            ]
+            self._freeze_model_params(exempt_submodule=exempt_submodule)
+
+    def _freeze_model_params(self, exempt_submodule: list[torch.nn.Module]):
+        """Freeze all model parameters excluding those specified in exempt_submodule."""
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        # Unfreeze only the exempt parameters
+        for layer in exempt_submodule:
+            for param in layer.parameters():
+                param.requires_grad = True
 
     def reseed(self, seed):
         pl.seed_everything(seed)
@@ -271,16 +312,104 @@ class OpenFold3AllAtom(ModelRunner):
                     sync_dist=False,
                 )
 
-    def training_step(self, batch, batch_idx):
+    def _clip_per_sample_grads(self):
+        # Calculate the total norm of all parameter gradients for this
+        # single example.
+        grads = (p.grad.detach() for p in self.model.parameters() if p.grad is not None)
+        global_norm = torch.sqrt(sum([torch.sum(g.float() ** 2) for g in grads]))
+
+        if self.logger is not None and self.config.settings.debug.log_grad_norm:
+            self.log(
+                "grad_norm",
+                global_norm,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=False,
+                logger=True,
+                sync_dist=True,
+            )
+
+        # Clip norm and compute rescale factor
+        # Note: We use maximum here to avoid CPU <-> GPU synchronization that can
+        # occur with additional conditional `if global_norm > self.max_grad_norm`
+        max_norm = torch.tensor(self.max_grad_norm, device=global_norm.device)
+        clip_coef = self.max_grad_norm / torch.maximum(global_norm, max_norm)
+
+        # Rescale gradients
+        for p in self.model.parameters():
+            if p.grad is not None:
+                p.grad.detach().mul_(clip_coef.to(p.dtype))
+
+    def _average_and_sync_grads(self):
+        # Average and sync the clipped per-example gradients across all GPUs.
+        if self.trainer.world_size > 1:
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
+
+    def _training_step_manual_clip(self, batch):
+        assert len(batch["pdb_id"]) == 1, (
+            "Currently only mini-batch size of 1 per GPU is supported."
+        )
+        assert self.trainer.accumulate_grad_batches == 1, (
+            "Gradient accumulation is not supported with per-sample gradient clipping."
+        )
+        assert not self.deepspeed_is_initialized, (
+            "Per-sample gradient clipping is not supported with DeepSpeed."
+        )
+
         example_feat = next(
             iter(v for v in batch.values() if isinstance(v, torch.Tensor))
         )
         if self.ema.device != example_feat.device:
             self.ema.to(example_feat.device)
 
-        # TODO: Remove debug logic
-        pdb_id = ", ".join(batch.pop("pdb_id"))
-        preferred_chain_or_interface = batch.pop("preferred_chain_or_interface")
+        pdb_id = ", ".join(batch["pdb_id"])
+        preferred_chain_or_interface = batch["preferred_chain_or_interface"]
+        logger.debug(
+            f"Started model forward pass for {pdb_id} with preferred chain or "
+            f"interface {preferred_chain_or_interface} on rank {self.global_rank} "
+            f"step {self.global_step}"
+        )
+
+        opt = self.optimizers()
+        opt.zero_grad()
+
+        try:
+            # Run the model
+            batch, outputs = self.model(batch)
+
+            # Compute loss
+            loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
+
+            self.manual_backward(loss)
+
+            self._clip_per_sample_grads()
+            self._average_and_sync_grads()
+
+            opt.step()
+
+            # Log it
+            self._log(loss_breakdown, batch, outputs)
+
+        except Exception:
+            logger.exception(
+                f"Train step failed with pdb id {pdb_id} with "
+                f"preferred chain or interface {preferred_chain_or_interface}"
+            )
+            raise
+
+        return loss
+
+    def _training_step(self, batch):
+        example_feat = next(
+            iter(v for v in batch.values() if isinstance(v, torch.Tensor))
+        )
+        if self.ema.device != example_feat.device:
+            self.ema.to(example_feat.device)
+
+        pdb_id = ", ".join(batch["pdb_id"])
+        preferred_chain_or_interface = batch["preferred_chain_or_interface"]
         logger.debug(
             f"Started model forward pass for {pdb_id} with preferred chain or "
             f"interface {preferred_chain_or_interface} on rank {self.global_rank} "
@@ -306,6 +435,12 @@ class OpenFold3AllAtom(ModelRunner):
 
         return loss
 
+    def training_step(self, batch, batch_idx):
+        if self.per_sample_grad_clipping:
+            return self._training_step_manual_clip(batch=batch)
+        else:
+            return self._training_step(batch=batch)
+
     def eval_step(self, batch, batch_idx):
         # At the start of validation, load the EMA weights
         if self.cached_weights is None:
@@ -318,15 +453,18 @@ class OpenFold3AllAtom(ModelRunner):
             self.cached_weights = tensor_tree_map(clone_param, self.model.state_dict())
             self.model.load_state_dict(self.ema.state_dict()["params"])
 
-        # TODO: Remove debug logic
-        pdb_id = batch.pop("pdb_id")
-        preferred_chain_or_interface = batch.pop("preferred_chain_or_interface")
-        atom_array = batch.pop("atom_array")
+        pdb_id = batch["pdb_id"]
+        is_repeated_sample = batch.get("repeated_sample")
+        if is_repeated_sample:
+            logger.debug(
+                f"Skipping repeated sample {', '.join(pdb_id)} on rank "
+                f"{self.global_rank}"
+            )
+            return
 
-        is_repeated_sample = batch.get("repeated_sample").item()
         logger.debug(
             f"Started validation for {', '.join(pdb_id)} on rank {self.global_rank} "
-            f"step {self.global_step}, repeated: {is_repeated_sample}"
+            f"step {self.global_step}"
         )
 
         try:
@@ -336,49 +474,11 @@ class OpenFold3AllAtom(ModelRunner):
             # Compute loss and other metrics
             _, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
 
-            batch["atom_array"] = atom_array
-            batch["pdb_id"] = pdb_id
-            batch["preferred_chain_or_interface"] = preferred_chain_or_interface
-
-            if not is_repeated_sample:
-                self._log(loss_breakdown, batch, outputs, train=False)
+            self._log(loss_breakdown, batch, outputs, train=False)
 
         except Exception:
             logger.exception(f"Validation step failed with pdb id {', '.join(pdb_id)}")
             raise
-
-    def transfer_batch_to_device(self, batch, device, dataloader_idx):
-        # TODO: Remove debug logic
-        pdb_id = batch.pop("pdb_id") if "pdb_id" in batch else None
-        query_id = batch.pop("query_id") if "query_id" in batch else None
-        preferred_chain_or_interface = (
-            batch.pop("preferred_chain_or_interface")
-            if "preferred_chain_or_interface" in batch
-            else None
-        )
-        atom_array = batch.pop("atom_array") if "atom_array" in batch else None
-
-        # This is to avoid slow loading for nested dicts in PL
-        # Less frequent hanging when non_blocking=True on H200
-        # TODO: Determine if this is really needed given other
-        #  recent hanging fixes
-        def to_device(t):
-            return t.to(device=device, non_blocking=True)
-
-        batch = tensor_tree_map(to_device, batch)
-
-        if pdb_id:
-            batch["pdb_id"] = pdb_id
-        if query_id:
-            batch["query_id"] = query_id
-        if preferred_chain_or_interface:
-            batch["preferred_chain_or_interface"] = preferred_chain_or_interface
-
-        # Add atom array back to the batch if we removed it earlier
-        if atom_array:
-            batch["atom_array"] = atom_array
-
-        return batch
 
     def _save_train_dataset_state_to_datamodule(self):
         self.trainer.datamodule.next_dataset_indices = (
@@ -409,6 +509,73 @@ class OpenFold3AllAtom(ModelRunner):
                 "Sampled batch indices: "
                 f"{self.trainer.train_dataloader.dataset.indices=}"
             )
+
+    @property
+    def deepspeed_is_initialized(self):
+        return deepspeed_is_installed and deepspeed.comm.comm.is_initialized()
+
+    def on_before_optimizer_step(self, *args, **kwargs):
+        """Logs the single-transition layer linear_out gradients.
+
+        These gradients can be associated with instabilities, so we're logging them on
+        every single step (bypassing log_every_n_steps) for more accurate monitoring.
+        """
+        debug_settings = self.config.settings.debug
+        should_log_extra_metrics = debug_settings.log_extra_grad_metrics
+        is_logging_disabled = self.logger is None
+        has_frozen_params = self.config.settings.train_confidence_only
+
+        if is_logging_disabled or has_frozen_params or not should_log_extra_metrics:
+            return
+
+        single_transition_grads = {}
+
+        # Only rank zero will actually log the gradients
+        log_grad_metrics = self.trainer.is_global_zero
+
+        # Only log 4 representative blocks to reduce overhead
+        block_idxs = [0, 16, 32, 47]
+
+        # To see if this slows down training, we additionally log runtimes from the
+        # global_zero process
+        # TODO: Set this to log-level INFO and configure per-module log-levels in a more
+        # principled way
+        timing_context = partial(PerformanceTimer, logger=logger, level=logging.WARNING)
+
+        context = (
+            timing_context("Extra-gradient fetching and calculation")
+            if log_grad_metrics and debug_settings.profile_grad_logging
+            else nullcontext()
+        )
+
+        with context:
+            for idx in block_idxs:
+                block = self.model.pairformer_stack.blocks[idx]
+                param = block.single_transition.linear_out.weight
+
+                if self.deepspeed_is_initialized:
+                    # Needs to be called on every rank to avoid hanging
+                    # https://github.com/deepspeedai/DeepSpeed/issues/7117#issuecomment-2717974187
+                    grad = deepspeed.utils.safe_get_full_grad(param)
+                else:
+                    grad = param.grad
+
+                assert not grad.requires_grad
+
+                if log_grad_metrics:
+                    tag = (
+                        f"extra_gradients/model.pairformer_stack.blocks.{idx}."
+                        "single_transition.linear_out.weight"
+                    )
+
+                    single_transition_grads[f"{tag}_norm"] = grad.norm().item()
+                    single_transition_grads[f"{tag}_max"] = grad.abs().max().item()
+
+        if log_grad_metrics:
+            with timing_context("Extra-gradient logging"):
+                # NOTE: This out-of-schedule logging might interact a bit weirdly with
+                # the WandB Step, so always plot against trainer/global_step
+                self.logger.log_metrics(single_transition_grads, step=self.global_step)
 
     def _log_epoch_metrics(
         self, metrics: MetricCollection, compute_model_selection: bool = False
@@ -519,7 +686,6 @@ class OpenFold3AllAtom(ModelRunner):
         ema = checkpoint["ema"]
         self.ema.load_state_dict(ema)
 
-    # TODO: Integrate with prediction step
     def _compute_confidence_scores(self, batch: dict, outputs: dict) -> dict:
         """Compute confidence metrics. This function is called during inference.
 
@@ -535,64 +701,36 @@ class OpenFold3AllAtom(ModelRunner):
                 Dict containing the following confidence measures:
                 pLDDT, PDE, PAE, pTM, iPTM, weighted pTM
         """
-        # Used in modified residue ranking
-        confidence_scores = {}
-        confidence_scores["plddt"] = compute_plddt(outputs["plddt_logits"])
-        confidence_scores.update(
-            compute_predicted_distance_error(
-                outputs["pde_logits"],
-                **self.config.confidence.pde,
-            )
-        )
-        confidence_scores["global_predicted_distance_error"] = (
-            compute_global_predicted_distance_error(
-                pde=confidence_scores["predicted_distance_error"],
-                distogram_probs=torch.softmax(outputs["distogram_logits"], dim=-1),
-            )
+        num_samples = self.config.architecture.shared.diffusion.no_full_rollout_samples
+        num_atoms = outputs["atom_positions_predicted"].shape[-2]
+        compute_per_sample = (
+            num_samples > 1
+            and self.config.settings.memory.eval.per_sample_atom_cutoff is not None
+            and num_atoms > self.config.settings.memory.eval.per_sample_atom_cutoff
         )
 
-        if self.config.architecture.heads.pae.enabled:
-            confidence_scores.update(
-                compute_predicted_aligned_error(
-                    outputs["pae_logits"],
-                    **self.config.confidence.pae,
-                )
-            )
-
-            _, valid_frame_mask = get_token_frame_atoms(
-                batch=batch,
-                x=outputs["atom_positions_predicted"],
-                atom_mask=batch["atom_mask"],
-            )
-
-            # Compute weighted pTM score
-            # Uses pae_logits (SI pg. 27)
-            ptm_scores = compute_weighted_ptm(
-                logits=outputs["pae_logits"],
-                asym_id=batch["asym_id"],
-                mask=valid_frame_mask,
-                **self.config.confidence.ptm,
-            )
-            confidence_scores.update(ptm_scores)
+        confidence_scores = get_confidence_scores(
+            batch=batch,
+            outputs=outputs,
+            config=self.config,
+            compute_per_sample=compute_per_sample,
+        )
 
         return confidence_scores
 
     def predict_step(self, batch, batch_idx):
-        # At the start of inference, load the EMA weights
-        if self.cached_weights is None:
-            # model.state_dict() contains references to model weights rather
-            # than copies. Therefore, we need to clone them before calling
-            # load_state_dict().
-            def clone_param(t):
-                return t.detach().clone()
+        # Skip if dataloader fails -> returns empty batch
+        is_repeated_sample = batch.get("repeated_sample")
+        valid_sample = batch.get("valid_sample")
+        if not valid_sample or is_repeated_sample:
+            return
 
-            self.cached_weights = tensor_tree_map(clone_param, self.model.state_dict())
-            self.model.load_state_dict(self.ema.state_dict()["params"])
+        query_id = batch["query_id"]
 
-        query_id = batch.pop("query_id")
-        atom_array = batch.pop("atom_array")
+        # Convert seeds back to list
+        seed = batch["seed"].cpu().tolist()
+        batch["seed"] = seed
 
-        seed = batch.pop("seed")
         self.reseed(seed[0])  # TODO: assuming we have bs = 1 for now
 
         # Probably need to change the logic
@@ -603,18 +741,57 @@ class OpenFold3AllAtom(ModelRunner):
         try:
             batch, outputs = self(batch)
 
-            batch["atom_array"] = atom_array
-            batch["query_id"] = query_id
-            batch["seed"] = seed
-
             # Generate confidence scores
             confidence_scores = self._compute_confidence_scores(batch, outputs)
             outputs["confidence_scores"] = confidence_scores
 
-            return (batch, outputs)
+            return batch, outputs
 
-        except Exception:
-            logger.exception(
-                f"Inference step failed with query id {', '.join(query_id)}"
+        except torch.OutOfMemoryError as e:
+            logger.error(
+                f"OOM for query_id(s) {', '.join(query_id)}. "
+                f"See {self.log_dir}/predict_err_rank{self.global_rank}.log "
+                f"for details."
             )
-            raise
+
+            self._log_predict_exception(e, query_id)
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        except Exception as e:
+            logger.error(
+                f"Failed for query_id(s) {', '.join(query_id)}: {e}. "
+                f"See {self.log_dir}/predict_err_rank{self.global_rank}.log "
+                f"for details."
+            )
+
+            self._log_predict_exception(e, query_id)
+
+    def _log_predict_exception(self, e, query_id):
+        """Formats and appends exceptions to a rank-specific error log."""
+
+        # Output dir is not specified
+        if self.log_dir is None:
+            return
+
+        log_file = self.log_dir / f"predict_err_rank{self.global_rank}.log"
+
+        # Get traceback and format message
+        error_traceback = traceback.format_exc()
+
+        lines = [
+            "==================================================",
+            f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Query ID(s): {', '.join(query_id)}",
+            f"Error Type: {type(e).__name__}",
+            f"Error Message: {e}",
+            "--------------------------------------------------",
+            f"Traceback:{error_traceback}",
+            "==================================================",
+        ]
+        log_entry = "\n".join(lines)
+
+        # Append the entry to the log file
+        with open(log_file, "a") as f:
+            f.write(log_entry)

@@ -1,8 +1,22 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import contextlib
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 import numpy as np
 from biotite.structure import AtomArray
@@ -63,8 +77,8 @@ class ProcessedReferenceMolecule:
     in_crop_mask: np.ndarray[bool]
 
     # TODO: make optional in inference
-    component_id: Optional[int] = None
-    permutations: Optional[list[np.ndarray[int]]] = None
+    component_id: int | None = None
+    permutations: list[np.ndarray[int]] | None = None
 
 
 @log_runtime_memory(runtime_dict_key="runtime-ref-conf-proc-fetch", multicall=True)
@@ -174,7 +188,9 @@ def get_processed_reference_conformer(
                 # Try with default, then use random init, then use fallback (technically
                 # default should not fail because we already tried the strategy in
                 # preprocessing)
-                mol, conf_id, _ = multistrategy_compute_conformer(mol)
+                mol, conf_id, _ = multistrategy_compute_conformer(
+                    mol, remove_hs=True, timeout_standard=30.0, timeout_rand_init=30.0
+                )
                 conf = mol.GetConformer(conf_id)
             elif preferred_confgen_strategy == "random_init":
                 # Try with random init, then use fallback (technically this also should

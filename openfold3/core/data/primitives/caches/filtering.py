@@ -1,3 +1,17 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """All operations for processing and manipulating metadata and training caches."""
 
 import functools
@@ -10,7 +24,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
-from typing import NamedTuple, Union
+from typing import NamedTuple
 
 import requests
 from tqdm import tqdm
@@ -138,8 +152,8 @@ def filter_by_token_count(
 
 def filter_by_release_date(
     structure_cache: StructureDataCache,
-    min_date: Union[date | str] | None = None,
-    max_date: Union[date | str] | None = None,
+    min_date: date | str | None = None,
+    max_date: date | str | None = None,
 ) -> StructureDataCache:
     """Filters the cache to only include entries within a specified date range.
 
@@ -734,7 +748,7 @@ def consolidate_training_set_data(
     for i, (
         training_cache_path,
         preprocessed_dir,
-    ) in enumerate(zip(training_cache_paths, preprocessed_dirs), start=1):
+    ) in enumerate(zip(training_cache_paths, preprocessed_dirs, strict=True), start=1):
         if i == 1:
             # Can avoid reading this twice
             training_cache = first_training_cache
@@ -1706,6 +1720,7 @@ def select_final_validation_data(
                 monomer_structure_data,
                 multimer_structure_data,
             ),
+            strict=True,
         ):
             if pdb_id not in set_structure_data:
                 continue

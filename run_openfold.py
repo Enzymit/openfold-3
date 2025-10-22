@@ -3,13 +3,7 @@
 # args TODO add license
 r"""
 
-# training
-python run_openfold.py train --runner_yaml=examples/training_new.yml \
-    --seed=42 \
-    --data_seed=1234
-
-# inference
-python run_openfold.py predict --runner_yaml=examples/inference_new.yml
+Main run script for OpenFold3. Please see the README for usage details.
 
 """
 
@@ -95,8 +89,10 @@ def train(runner_yaml: Path, seed: int | None = None, data_seed: int | None = No
 @click.option(
     "--inference_ckpt_path",
     type=click.Path(exists=True, file_okay=True, dir_okay=True, path_type=Path),
-    required=True,
-    help="Path for model checkpoint to be used for inference",
+    required=False,
+    help="Path for model checkpoint to be used for inference. "
+    "If not specified, will attempt to find or download parameters to "
+    "$OPENFOLD_CACHE [default: ~/.openfold3/]",
 )
 @click.option(
     "--num_diffusion_samples",
@@ -138,7 +134,7 @@ def train(runner_yaml: Path, seed: int | None = None, data_seed: int | None = No
 )
 def predict(
     query_json: Path,
-    inference_ckpt_path: Path,
+    inference_ckpt_path: Path | None = None,
     num_diffusion_samples: int | None = None,
     num_model_seeds: int | None = None,
     runner_yaml: Path | None = None,
@@ -163,7 +159,7 @@ def predict(
     )
 
     # Dump experiment runner
-    with open(output_dir / "experiment_config.json", "w") as f:
+    with open(expt_runner.output_dir / "experiment_config.json", "w") as f:
         json.dump(expt_config.model_dump_json(indent=2), f)
 
     # Load inference query set
@@ -173,8 +169,6 @@ def predict(
     expt_runner.setup()
     expt_runner.run(query_set)
     expt_runner.cleanup()
-
-    # TODO add post-process relaxation with openmm
 
 
 @cli.command()

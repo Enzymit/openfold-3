@@ -1,3 +1,17 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import ml_collections as mlc
 
 from openfold3.projects.of3_all_atom.config import (
@@ -19,11 +33,13 @@ c_s_input = mlc.FieldReference(c_token_embedder + 65, field_type=int)
 sigma_data = mlc.FieldReference(16, field_type=int)
 max_relative_idx = mlc.FieldReference(32, field_type=int)
 max_relative_chain = mlc.FieldReference(2, field_type=int)
-diffusion_training_enabled = mlc.FieldReference(True, field_type=bool)
 n_query = mlc.FieldReference(32, field_type=int)
 n_key = mlc.FieldReference(128, field_type=int)
 
-# templates_enabled = mlc.FieldReference(True, field_type=bool)
+# Model components
+train_confidence_only = mlc.FieldReference(False, field_type=bool)
+pae_head_enabled = mlc.FieldReference(False, field_type=bool)
+
 eps = mlc.FieldReference(1e-8, field_type=float)
 inf = mlc.FieldReference(1e9, field_type=float)
 blocks_per_ckpt = mlc.FieldReference(None, field_type=int)
@@ -34,6 +50,7 @@ max_atoms_per_token = mlc.FieldReference(23, field_type=int)
 # Cutoffs for chunking ops per diffusion sample
 per_sample_token_cutoff = mlc.FieldReference(750, field_type=int)
 per_sample_atom_cutoff = mlc.FieldReference(10000, field_type=int)
+low_mem_validation = mlc.FieldReference(False, field_type=bool)
 
 model_selection_metric_weights_config = mlc.FrozenConfigDict(
     {
@@ -74,19 +91,21 @@ model_config = mlc.ConfigDict(
                 "train": {
                     "chunk_size": None,
                     # Use DeepSpeed memory-efficient attention kernel. Mutually
-                    # exclusive with use_lma and use_flash.
+                    # exclusive with use_lma.
                     "use_deepspeed_evo_attention": True,
+                    "use_cueq_triangle_kernels": False,
                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
                     # exclusive with use_deepspeed_evo_attention.
                     "use_lma": False,
                     "msa_module": {
                         "swiglu_chunk_token_cutoff": None,
-                        "swiglu_seq_chunk_size": 4000,
+                        "swiglu_seq_chunk_size": None,
                     },
                 },
                 "eval": {
                     "chunk_size": None,
                     "use_deepspeed_evo_attention": True,
+                    "use_cueq_triangle_kernels": False,
                     "use_lma": False,
                     "msa_module": {
                         "swiglu_chunk_token_cutoff": None,
@@ -94,8 +113,10 @@ model_config = mlc.ConfigDict(
                     },
                     "per_sample_token_cutoff": per_sample_token_cutoff,
                     "per_sample_atom_cutoff": per_sample_atom_cutoff,
+                    "low_mem_validation": low_mem_validation,
                     "offload_inference": {
-                        "enabled": False,
+                        "msa_module": False,
+                        "confidence_heads": False,
                         "token_cutoff": None,
                     },
                 },
@@ -104,7 +125,8 @@ model_config = mlc.ConfigDict(
             #  to allow per-module overrides
             "blocks_per_ckpt": blocks_per_ckpt,
             "ckpt_intermediate_steps": ckpt_intermediate_steps,
-            "diffusion_training_enabled": diffusion_training_enabled,
+            "clear_cache_between_steps": False,
+            "train_confidence_only": train_confidence_only,
             "optimizer": {
                 "use_deepspeed_adam": False,
                 "learning_rate": 1.8e-3,
@@ -119,12 +141,21 @@ model_config = mlc.ConfigDict(
                 "decay_every_n_steps": 50000,
                 "decay_factor": 0.95,
             },
-            "ema": {"decay": 0.999},
-            "gradient_clipping": 10.0,
+            "ema": {"decay": 0.999, "submodules_to_update": None},
+            "gradient_clipping": {
+                "per_sample_clipping": True,
+                "clip_val": 10.0,
+            },
             "model_selection_weight_scheme": "initial_training",
+            "debug": {
+                "log_grad_norm": False,
+                "log_extra_grad_metrics": False,
+                "profile_grad_logging": False,
+            },
         },
         "architecture": {
             "shared": {
+                "sync_seed": 0,
                 "c_s_input": c_s_input,
                 "c_s": c_s,
                 "c_z": c_z,
@@ -207,8 +238,8 @@ model_config = mlc.ConfigDict(
                     "c_m_feats": 34,
                     "c_m": c_m,
                     "c_s_input": c_s_input,
-                    "subsample_main_msa": True,
-                    "subsample_all_msa": False,
+                    "subsample_main_msa": False,
+                    "subsample_all_msa": True,
                     "min_subsampled_all_msa": 1024,
                     "max_subsampled_all_msa": 1024,
                     "linear_init_params": lin_init.msa_module_emb_init,
@@ -274,6 +305,7 @@ model_config = mlc.ConfigDict(
                     "max_relative_idx": max_relative_idx,
                     "max_relative_chain": max_relative_chain,
                     "linear_init_params": lin_init.diffusion_cond_init,
+                    "tune_chunk_size": tune_chunk_size,
                 },
                 "atom_attn_enc": {
                     "c_s": c_s,
@@ -381,7 +413,7 @@ model_config = mlc.ConfigDict(
                     "c_z": c_z,
                     "c_out": 64,
                     "linear_init_params": lin_init.pae_init,
-                    "enabled": False,
+                    "enabled": pae_head_enabled,
                 },
                 "pde": {
                     "c_z": c_z,
@@ -408,6 +440,9 @@ model_config = mlc.ConfigDict(
                 },
             },
             "loss_module": {
+                "train_confidence_only": train_confidence_only,
+                "per_sample_atom_cutoff": per_sample_atom_cutoff,
+                "low_mem_validation": low_mem_validation,
                 "confidence_loss_names": [
                     "plddt",
                     "pde",
@@ -435,6 +470,7 @@ model_config = mlc.ConfigDict(
                         "no_bins": 64,
                         "bin_min": 0.0,
                         "bin_max": 32.0,
+                        "enabled": pae_head_enabled,
                     },
                     "per_sample_atom_cutoff": per_sample_atom_cutoff,
                     "eps": eps,
@@ -458,23 +494,45 @@ model_config = mlc.ConfigDict(
         },
         "confidence": {
             "per_sample_atom_cutoff": per_sample_atom_cutoff,
+            "low_mem_validation": low_mem_validation,
+            "plddt": {
+                "no_bins": 50,
+                "bin_min": 0,
+                "bin_max": 1,
+            },
             "pde": {
-                "max_bin": 31,
+                "bin_min": 0,
+                "bin_max": 32,
                 "no_bins": 64,
+                "return_probs": False,
             },
             "pae": {
-                "max_bin": 31,
+                "bin_min": 0,
+                "bin_max": 32,
                 "no_bins": 64,
+                "return_probs": False,
             },
             "distogram": {
-                "min_bin": 2,
-                "max_bin": 22,
+                "bin_min": 2,
+                "bin_max": 22,
+                "no_bins": 64,
+                "return_contact_probs": False,
             },
             "ptm": {
-                "max_bin": 31,
+                "bin_min": 0,
+                "bin_max": 32,
                 "no_bins": 64,
-                "ptm_weight": 0.2,
-                "iptm_weight": 0.8,
+            },
+            "sample_ranking": {
+                "full_complex": {
+                    "ptm_weight": 0.2,
+                    "iptm_weight": 0.8,
+                    "disorder_weight": 0.5,
+                    "has_clash_weight": -100.0,
+                    "disorder_threshold": 0.581,
+                },
+                "chain_pair_iptm": {"enabled": True},
+                "chain_ptm": {"enabled": True},
             },
             "clash": {
                 "min_distance": 1.1,

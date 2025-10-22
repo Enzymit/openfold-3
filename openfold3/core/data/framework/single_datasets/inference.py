@@ -1,10 +1,24 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Inference class template for first inference pipeline prototype.
 """
 
 import itertools
 import logging
-from typing import Optional
+import traceback
 
 import pandas as pd
 import torch
@@ -70,7 +84,7 @@ class InferenceDataset(Dataset):
     def __init__(
         self,
         dataset_config: DefaultDatasetConfigSection,
-        world_size: Optional[int] = None,
+        world_size: int | None = None,
     ) -> None:
         """Initializes the InferenceDataset."""
         super().__init__()
@@ -95,7 +109,9 @@ class InferenceDataset(Dataset):
 
         # Templates
         self.template_settings = dataset_config.template
-        self.template_preprocessor_settings = dataset_config.template_preprocessor
+        self.template_preprocessor_settings = (
+            dataset_config.template_preprocessor_settings
+        )
         if self.template_preprocessor_settings.preparse_structures:
             self.template_preprocessor_settings.structure_file_format = "npz"
 
@@ -110,11 +126,28 @@ class InferenceDataset(Dataset):
         # different seeds)
         self.create_datapoint_cache()
 
-    # TODO: Consider sorting the datapoints by token_count
     def create_datapoint_cache(self) -> None:
         qids = self.query_cache.keys()
+
+        # Order by total sequence length (excluding ligands) so that the run times
+        # are more consistent across GPUs
+        query_len_map = {}
+        for k, v in self.query_cache.items():
+            total_poly_seq_len = sum(
+                [
+                    len(c.sequence) * len(c.chain_ids) if c.sequence is not None else 0
+                    for c in v.chains
+                ]
+            )
+            query_len_map[k] = total_poly_seq_len
+
+        qids = sorted(
+            qids,
+            key=lambda q: query_len_map[q],
+        )
+
         qid_values, seed_values = zip(
-            *[(q, s) for q, s in itertools.product(qids, self.seeds)]
+            *[(q, s) for q, s in itertools.product(qids, self.seeds)], strict=True
         )
 
         _datapoint_cache = pd.DataFrame(
@@ -123,6 +156,7 @@ class InferenceDataset(Dataset):
                 "seed": seed_values,
             }
         )
+
         self.datapoint_cache = pad_to_world_size(_datapoint_cache, self.world_size)
 
     @staticmethod
@@ -297,13 +331,34 @@ class InferenceDataset(Dataset):
         query_id = datapoint["query_id"]
         query = self.query_cache[query_id]
         seed = datapoint["seed"]
+        is_repeated_sample = bool(datapoint["repeated_sample"])
 
-        # TODO: Could wrap this in try/except
-        features = self.create_all_features(query)
-        features["query_id"] = query_id
-        features["seed"] = torch.tensor([seed])
+        try:
+            features = self.create_all_features(query)
+            features["query_id"] = query_id
+            features["seed"] = torch.tensor([seed])
+            features["repeated_sample"] = torch.tensor(
+                [is_repeated_sample], dtype=torch.bool
+            )
+            features["valid_sample"] = torch.tensor([True], dtype=torch.bool)
 
-        return features
+            return features
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.warning(
+                "-" * 40
+                + "\n"
+                + f"Failed to process {query_id} with preferred"
+                + f"Exception type: {type(e).__name__}\nTraceback: {tb}"
+                + "-" * 40
+            )
+            features = {
+                "query_id": query_id,
+                "repeated_sample": torch.tensor([is_repeated_sample], dtype=torch.bool),
+                "valid_sample": torch.tensor([False], dtype=torch.bool),
+            }
+
+            return features
 
     def __len__(self):
         return len(self.datapoint_cache)

@@ -1,3 +1,17 @@
+# Copyright 2025 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from pathlib import Path
 
 import numpy as np
@@ -47,7 +61,9 @@ def test_sto_parser(file_path, output_path, max_sequences):
     templates = sto_parser(sto_string, QUERY_SEQUENCE)
     expected_templates = np.load(output_path, allow_pickle=True)["templates"].item()
     assert len(templates) == len(expected_templates)
-    for actual, expected in zip(templates.values(), expected_templates.values()):
+    for actual, expected in zip(
+        templates.values(), expected_templates.values(), strict=False
+    ):
         _compare_template_data(actual, expected)
 
 
@@ -73,7 +89,9 @@ def test_a3m_parser(file_path, output_path, max_sequences):
     templates = a3m_parser(a3m_string, query_seq_str=QUERY_SEQUENCE)
     expected_templates = np.load(output_path, allow_pickle=True)["templates"].item()
     assert len(templates) == len(expected_templates)
-    for actual, expected in zip(templates.values(), expected_templates.values()):
+    for actual, expected in zip(
+        templates.values(), expected_templates.values(), strict=False
+    ):
         _compare_template_data(actual, expected)
 
 
@@ -87,7 +105,9 @@ def test_m8_parser():
     templates = m8_parser(m8_cigar, query_seq_str=QUERY_SEQUENCE)
     expected_templates = np.load(output_path, allow_pickle=True)["templates"].item()
     assert len(templates) == len(expected_templates)
-    for actual, expected in zip(templates.values(), expected_templates.values()):
+    for actual, expected in zip(
+        templates.values(), expected_templates.values(), strict=False
+    ):
         _compare_template_data(actual, expected)
 
     m8_no_cigar = m8_cigar.loc[:, m8_cigar.columns != "cigar"].copy()
@@ -98,7 +118,7 @@ def test_m8_parser():
     ].item()
     assert len(templates) == len(expected_templates)
     for actual, expected in zip(
-        templates_no_cigar.values(), expected_templates_no_cigar.values()
+        templates_no_cigar.values(), expected_templates_no_cigar.values(), strict=False
     ):
         _compare_template_data(actual, expected)
 
