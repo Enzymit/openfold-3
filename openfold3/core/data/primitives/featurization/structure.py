@@ -172,3 +172,49 @@ def create_atom_to_token_index(
     ).to(dtype=torch.int32)
 
     return atom_to_token_index
+
+
+def make_chain_pair_mask_padded(
+    token_chain_id: torch.Tensor, interfaces_to_include: list[tuple[int, int]]
+) -> torch.Tensor:
+    """Creates a pairwise mask for chains given a list of chain tuples.
+    Args:
+        token_chain_id:
+            tensor containing all chain ids in complex
+        interfaces_to_include:
+            tuples with pairwise interactions to include
+    Returns:
+        torch.Tensor [n_chains + 1, n_chains + 1] where:
+            - each value [i,j] represents
+            - a 0th row and 0th column of all zeros is added as padding
+    """
+    largest_chain_index = torch.max(token_chain_id)
+    chain_mask = torch.zeros(
+        (largest_chain_index + 1, largest_chain_index + 1), dtype=torch.int
+    )
+
+    for interface_tuple in interfaces_to_include:
+        chain_mask[interface_tuple[0], interface_tuple[1]] = 1
+        chain_mask[interface_tuple[1], interface_tuple[0]] = 1
+
+    return chain_mask
+
+
+def make_chain_pair_labels(
+    token_chain_id: torch.Tensor,
+    inter_chain_types: list[str | tuple],
+    type_to_chain_id_pair: dict[str | tuple, int],
+):
+    largest_chain_index = torch.max(token_chain_id)
+    chain_labels = torch.zeros(
+        (largest_chain_index + 1, largest_chain_index + 1), dtype=torch.int
+    )
+
+    for idx, inter_ab_ag_type in enumerate(inter_chain_types):
+        chain_id_pairs = type_to_chain_id_pair[inter_ab_ag_type]
+        if len(chain_id_pairs) > 0:
+            for chain_id_i, chain_id_j in chain_id_pairs:
+                chain_labels[chain_id_i, chain_id_j] = idx
+                chain_labels[chain_id_j, chain_id_i] = idx
+
+    return chain_labels
