@@ -765,7 +765,7 @@ class ValidationDatasetChainData(ClusteredDatasetChainData):
     use_metrics: bool
     ranking_model_fit: float | None
     source_subset: Literal["monomer", "multimer", "base"] | None
-    sabdab_annotation: Literal["AB-H", "AB-L", "AG"] | None
+    sabdab_annotation: Literal["AB-H", "AB-L", "AG"] | None = None
 
 
 @dataclass
