@@ -225,9 +225,11 @@ def aggregate_atom_feat_to_tokens_nd(
         - 'mean' divides the final sum by the product of per-axis atom counts per token
 
     Shapes:
-      - atom_feat: [..., A1, ..., A2, ..., Ak, ...]
-      - atom_to_token_index_list[i]: broadcasts to the axis A_i (int in [0, R_i))
-      - returns:  [..., R1, ..., R2, ..., Rk, ...] (same axis positions as inputs)
+        - atom_feat: [*, N_atom_0, *, N_atom_i, *, N_atom_k, *]
+        - atom_to_token_index_list[i]: [N_atom_0, ..., N_atom_i, ...]
+        - atom_masks[i]: [N_atom_0, ..., N_atom_i, ...]
+        - token_masks[i]: [N_token_0, ..., N_token_i, ...]
+        - returns:  [*, N_token_0, *, N_token_i, *, N_atom_k, *]
 
     Args:
         atom_feat (torch.Tensor):
@@ -361,7 +363,7 @@ def aggregate_atom_feat_to_tokens_nd(
             eps=eps,
         )
 
-        # Gounts per token on this axis for mean
+        # Counts per token on this axis for mean
         if aggregate_fn == "mean":
             counts = torch.zeros(*bs, n_token, device=y.device, dtype=y_perm.dtype)
             counts = counts.scatter_add_(
