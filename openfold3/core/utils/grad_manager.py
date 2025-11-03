@@ -17,7 +17,7 @@ import logging
 import pytorch_lightning as pl
 import torch
 import torch.distributed as dist
-from torchmetrics import MeanMetric
+from torchmetrics import MaxMetric, MeanMetric
 
 from openfold3.core.utils.tensor_utils import tensor_tree_map
 
@@ -49,6 +49,7 @@ class PerSampleGradManager:
 
         # Used for logging the average of unclipped per-sample norms
         self.avg_unclipped_norm_metric = MeanMetric() if log_grad_norm else None
+        self.max_unclipped_norm_metric = MaxMetric() if log_grad_norm else None
 
         # Pointers to these objects will be linked in the setup() call
         self._model = None
@@ -86,8 +87,11 @@ class PerSampleGradManager:
                 self.max_grad_norm, device=self._device
             )
 
-        if self.avg_unclipped_norm_metric is not None:
+        if self.log_grad_norm:
             self.avg_unclipped_norm_metric = self.avg_unclipped_norm_metric.to(
+                self._device
+            )
+            self.max_unclipped_norm_metric = self.max_unclipped_norm_metric.to(
                 self._device
             )
 
@@ -135,8 +139,9 @@ class PerSampleGradManager:
             return
 
         # Update the metric
-        if self.avg_unclipped_norm_metric is not None:
+        if self.log_grad_norm:
             self.avg_unclipped_norm_metric.update(global_norm)
+            self.max_unclipped_norm_metric.update(global_norm)
 
         # Only start logging unclipped grads after warmup
         warning_threshold = self.max_grad_norm * 2.0
@@ -184,12 +189,17 @@ class PerSampleGradManager:
         global_count = local_count.item()
 
         # Log the average unclipped per-sample norm using the metric
-        if global_count > 0 and self.avg_unclipped_norm_metric is not None:
+        if global_count > 0 and self.log_grad_norm:
             avg_per_sample_norm = self.avg_unclipped_norm_metric.compute()
+            max_per_sample_norm = self.max_unclipped_norm_metric.compute()
 
             if self._logger is not None:
                 self._logger.log_metrics(
                     {"extra_gradients/avg_unclipped_grad_norm": avg_per_sample_norm},
+                    step=self._trainer.global_step,
+                )
+                self._logger.log_metrics(
+                    {"extra_gradients/max_unclipped_grad_norm": max_per_sample_norm},
                     step=self._trainer.global_step,
                 )
 
@@ -290,8 +300,9 @@ class PerSampleGradManager:
         self.accum_count = 0
 
         # Reset the metric
-        if self.avg_unclipped_norm_metric is not None:
+        if self.log_grad_norm:
             self.avg_unclipped_norm_metric.reset()
+            self.max_unclipped_norm_metric.reset()
 
     @property
     def device(self):
@@ -302,8 +313,9 @@ class PerSampleGradManager:
         self.grad_accumulator = tensor_tree_map(
             lambda t: t.to(device), self.grad_accumulator
         )
-        if self.avg_unclipped_norm_metric is not None:
+        if self.log_grad_norm:
             self.avg_unclipped_norm_metric = self.avg_unclipped_norm_metric.to(device)
+            self.max_unclipped_norm_metric = self.max_unclipped_norm_metric.to(device)
 
         if self._max_norm_tensor is not None:
             self._max_norm_tensor = self._max_norm_tensor.to(device)
