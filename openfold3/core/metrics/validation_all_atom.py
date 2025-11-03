@@ -13,7 +13,9 @@
 # limitations under the License.
 
 from collections.abc import Sequence
-from itertools import combinations
+from dataclasses import dataclass, field
+from itertools import combinations, combinations_with_replacement
+from typing import Literal
 
 import torch
 
@@ -449,6 +451,27 @@ def fnat(contacts_gt: torch.Tensor, contacts_pred: torch.Tensor) -> torch.Tensor
     return fnat
 
 
+@dataclass
+class DockQResult:
+    """DockQ results class.
+
+    Attributes:
+        chain_pair_to_dockq:
+            Chain ID pairs to DockQ score [*].
+        chain_pair_to_moltype:
+            Chain ID pairs to molecule types.
+        chain_pair_to_n_contacts:
+            Chain ID pairs to number of residue pairs in contact at the FNAT threshold.
+        chain_pair_to_dockq:
+            Chain ID pairs to number of contacting residues at the FNAT threshold.
+    """
+
+    chain_pair_to_dockq: dict = field(default_factory=dict)
+    chain_pair_to_moltype: dict = field(default_factory=dict)
+    chain_pair_to_n_contacts: dict = field(default_factory=dict)
+    chain_pair_to_dockq: dict = field(default_factory=dict)
+
+
 def dockq(
     pred_coords: torch.Tensor,
     gt_coords: torch.Tensor,
@@ -465,9 +488,53 @@ def dockq(
     d_irmsd: float = 10.0,
     d1: float = 8.5,
     d2: float = 1.5,
-) -> dict[str, torch.Tensor]:
+) -> DockQResult:
+    """Calculates per-interface DockQ scores.
+
+    Args:
+        pred_coords (torch.Tensor):
+            Predicted coordinates of the complex [*, N_atom, 3].
+        gt_coords (torch.Tensor):
+            Ground truth coordinates of the complex [*, N_atom, 3].
+        all_atom_mask (torch.Tensor):
+            Atom mask for unresolved atoms [*, N_atom].
+        asym_id_atomized (torch.Tensor):
+            Per-atom asym IDs [*, N_atom].
+        res_id_atomized (torch.Tensor):
+            Per-atom residue IDs [*, N_atom].
+        ref_atom_name_chars_atomized (torch.Tensor):
+            Per-atom atom names in the AF3-stype encoding [*, N_atom, 4, 64].
+        inter_filter_atomized (torch.Tensor):
+            Precomputed mask for which atom pairs to consider in the calculation [*,
+            N_atom, N_atom].
+        is_protein_atomized (torch.Tensor):
+            Per-atom protein mask [*, N_atom].
+        is_rna_atomized (torch.Tensor):
+            Per-atom RNA mask [*, N_atom].
+        is_dna_atomized (torch.Tensor):
+            Per-atom DNA mask [*, N_atom].
+        is_ligand_atomized (torch.Tensor):
+            Per-atom ligand mask [*, N_atom].
+        d_fnat (float, optional):
+            Contact threshold for FNAT calculation. Defaults to 5.0.
+        d_irmsd (float, optional):
+            Contact threshold for iRMSD calculation. Defaults to 10.0.
+        d1 (float, optional):
+            DockQ d1 parameter. Defaults to 8.5.
+        d2 (float, optional):
+            DockQ d2 parameter. Defaults to 1.5.
+
+    Raises:
+        NotImplementedError:
+            If batch size is > 1.
+
+    Returns:
+        DockQResult:
+            Per-interface DockQ scores and associated metadata [*].
+    """
     bs = asym_id_atomized.shape[:-1]
     n = asym_id_atomized.shape[-1:]
+    dockq_result = DockQResult()
 
     is_backbone = _get_atom_name_mask(ref_atom_name_chars_atomized, BACKBONE_ATOMS)
 
@@ -495,6 +562,13 @@ def dockq(
     if bs[0] > 1:
         raise NotImplementedError("DockQ for batch size > 1 not implemented.")
     for ci, cj in combinations(chain_id_polymer, 2):
+        # Add moltype data
+        chain_id_pair = (ci.item(), cj.item())
+        dockq_result.chain_pair_to_moltype[chain_id_pair] = (
+            chain_id_to_moltype[ci.item()],
+            chain_id_to_moltype[cj.item()],
+        )
+
         # Chain masks
         is_ci = (asym_id_atomized == ci) & all_atom_mask.bool()
         is_cj = (asym_id_atomized == cj) & all_atom_mask.bool()
@@ -590,6 +664,14 @@ def dockq(
         fnat = contacts_nat_recovered.to(torch.float32) / torch.clamp(
             contacts_nat, min=1.0
         )
+
+        # Add contact data
+        dockq_result.chain_pair_to_n_contacts[chain_id_pair] = torch.sum(
+            contacts_gt_d_fnat_res, dim=[-1, -2]
+        )
+        dockq_result.chain_pair_to_n_if_res[chain_id_pair] = torch.sum(
+            torch.sum(contacts_gt_d_fnat_res, dim=-1) > 0, dim=-1
+        ) + torch.sum(torch.sum(contacts_gt_d_fnat_res, dim=-2) > 0, dim=-1)
 
         del [
             contacts_gt_d_fnat_atomized,
@@ -689,22 +771,133 @@ def dockq(
             )
         )
 
+        # DockQ
         dockq_score = (
             fnat
             + (1.0 / (1.0 + (lrmsd_score / d1) ** 2)).view(bs)
             + (1.0 / (1.0 + (irmsd_score / d2) ** 2)).view(bs)
         ) / 3.0
 
-        print(dockq_score)
-        # add here:
-        # - chain-pair dict of dockq scores, grouped by moltype pairs
+        dockq_result.chain_pair_to_dockq[chain_id_pair] = dockq_score
+
         # - handle cases without valid interfaces due to continues
 
-        # add wrapper: whole complex dockq - check weighting
+    return dockq_result
 
-        break
 
-    return
+def dockq_full_complex(
+    pred_coords: torch.Tensor,
+    gt_coords: torch.Tensor,
+    all_atom_mask: torch.Tensor,
+    asym_id_atomized: torch.Tensor,
+    res_id_atomized: torch.Tensor,
+    ref_atom_name_chars_atomized: torch.Tensor,
+    inter_filter_atomized: torch.Tensor,
+    is_protein_atomized: torch.Tensor,
+    is_rna_atomized: torch.Tensor,
+    is_dna_atomized: torch.Tensor,
+    is_ligand_atomized: torch.Tensor,
+    d_fnat: float = 5.0,
+    d_irmsd: float = 10.0,
+    d1: float = 8.5,
+    d2: float = 1.5,
+    weight_by: Literal["n_contacts", "n_if_res"] = "n_contacts",
+) -> dict[str, torch.Tensor]:
+    """Computes whole-complex dockq.
+
+    Returns both unweighted DockQ and DockQ weighted by either number of contacts or
+    number of interface residues, per molecule type pair.
+
+    Args:
+        pred_coords (torch.Tensor):
+            Predicted coordinates of the complex [*, N_atom, 3].
+        gt_coords (torch.Tensor):
+            Ground truth coordinates of the complex [*, N_atom, 3].
+        all_atom_mask (torch.Tensor):
+            Atom mask for unresolved atoms [*, N_atom].
+        asym_id_atomized (torch.Tensor):
+            Per-atom asym IDs [*, N_atom].
+        res_id_atomized (torch.Tensor):
+            Per-atom residue IDs [*, N_atom].
+        ref_atom_name_chars_atomized (torch.Tensor):
+            Per-atom atom names in the AF3-stype encoding [*, N_atom, 4, 64].
+        inter_filter_atomized (torch.Tensor):
+            Precomputed mask for which atom pairs to consider in the calculation [*,
+            N_atom, N_atom].
+        is_protein_atomized (torch.Tensor):
+            Per-atom protein mask [*, N_atom].
+        is_rna_atomized (torch.Tensor):
+            Per-atom RNA mask [*, N_atom].
+        is_dna_atomized (torch.Tensor):
+            Per-atom DNA mask [*, N_atom].
+        is_ligand_atomized (torch.Tensor):
+            Per-atom ligand mask [*, N_atom].
+        d_fnat (float, optional):
+            Contact threshold for FNAT calculation. Defaults to 5.0.
+        d_irmsd (float, optional):
+            Contact threshold for iRMSD calculation. Defaults to 10.0.
+        d1 (float, optional):
+            DockQ d1 parameter. Defaults to 8.5.
+        d2 (float, optional):
+            DockQ d2 parameter. Defaults to 1.5.
+        weight_by (Literal['n_contacts', 'n_if_res'], optional):
+            Metric to weight by. Defaults to "n_contacts".
+
+    Returns:
+        dict[str, torch.Tensor]:
+            Molecule type pair to weighted and unweighted DockQ scores [*].
+    """
+
+    dockq_result = dockq(
+        pred_coords=pred_coords,
+        gt_coords=gt_coords,
+        all_atom_mask=all_atom_mask,
+        asym_id_atomized=asym_id_atomized,
+        res_id_atomized=res_id_atomized,
+        ref_atom_name_chars_atomized=ref_atom_name_chars_atomized,
+        inter_filter_atomized=inter_filter_atomized,
+        is_protein_atomized=is_protein_atomized,
+        is_rna_atomized=is_rna_atomized,
+        is_dna_atomized=is_dna_atomized,
+        is_ligand_atomized=is_ligand_atomized,
+        d_fnat=d_fnat,
+        d_irmsd=d_irmsd,
+        d1=d1,
+        d2=d2,
+    )
+
+    out = {}
+    moltype_pairs = combinations_with_replacement(["protein", "rna", "dna"], 2)
+    aggregate_items = ["dockq_scores", "n_contacts", "n_if_res"]
+    aggregator = {}
+
+    for _, dockq_scores, moltypes, n_contacts, n_if_res in dockq_result.iter_pairs():
+        if moltypes not in moltype_pairs:
+            moltypes = (moltypes[1], moltypes[0])
+        for i, iname in zip(
+            [dockq_scores, n_contacts, n_if_res], aggregate_items, strict=True
+        ):
+            if moltypes not in aggregator:
+                aggregator[moltypes] = {k: None for k in aggregate_items}
+            if aggregator[moltypes][iname] is None:
+                aggregator[moltypes][iname] = i.unsqueeze(-1)
+            else:
+                aggregator[moltypes][iname] = torch.concatenate(
+                    [aggregator[moltypes][iname], i.unsqueeze(-1)], dim=-1
+                )
+
+    for moltype_pair, metrics in aggregator.items():
+        dockq_scores = metrics["dockq_scores"]
+        dockq_scores_unweighted = torch.mean(dockq_scores, dim=-1)
+        weight_metric = metrics[weight_by]
+        weights = weight_metric / torch.sum(weight_metric, dim=-1, keepdim=True)
+        dockq_scores_weighted = torch.sum(dockq_scores * weights, dim=-1)
+
+        metric_name = f"val/dockq_{moltype_pair[0]}_{moltype_pair[1]}"
+        out[f"{metric_name}_uw"] = dockq_scores_unweighted
+        out[f"{metric_name}_w"] = dockq_scores_weighted
+
+    return out
 
 
 def get_protein_metrics(
