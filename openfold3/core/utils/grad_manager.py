@@ -17,6 +17,7 @@ import logging
 import pytorch_lightning as pl
 import torch
 import torch.distributed as dist
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from torchmetrics import MaxMetric, MeanMetric
 
 from openfold3.core.utils.tensor_utils import tensor_tree_map
@@ -112,16 +113,11 @@ class PerSampleGradManager:
             return torch.tensor(0.0, device=self.device), []
 
         # Calculate the total norm of all parameter gradients
-        # Torch version (norm of norms):
-        # per_tensor_norms = [
-        #     torch.linalg.vector_norm(p.grad.float(), ord=2) for p in params_with_grad
-        # ]
-        #
-        # global_norm = torch.linalg.vector_norm(torch.stack(per_tensor_norms), ord=2)
+        per_tensor_norms = [
+            torch.linalg.vector_norm(p.grad.float(), ord=2) for p in params_with_grad
+        ]
 
-        # Calculate the total squared norm of all parameter gradients
-        total_norm_sq = sum([(p.grad.float() ** 2).sum() for p in params_with_grad])
-        global_norm = torch.sqrt(total_norm_sq)
+        global_norm = torch.linalg.vector_norm(torch.stack(per_tensor_norms), ord=2)
 
         return global_norm, params_with_grad
 
@@ -130,7 +126,7 @@ class PerSampleGradManager:
         """Clips the gradients currently stored in self._model.parameters()"""
 
         # Skip clipping if it's disabled
-        if self.max_grad_norm is None or self._max_norm_tensor is None:
+        if self.max_grad_norm is None:
             return
 
         global_norm, params_with_grad = self._compute_global_norm()
@@ -144,7 +140,7 @@ class PerSampleGradManager:
             self.max_unclipped_norm_metric.update(global_norm)
 
         # Only start logging unclipped grads after warmup
-        warning_threshold = self.max_grad_norm * 2.0
+        warning_threshold = self.max_grad_norm * 5.0
         per_sample_global_norm = global_norm.item()
         if (
             logging_info is not None
@@ -211,14 +207,31 @@ class PerSampleGradManager:
                     p.grad.zero_()
             return
 
-        # Sum gradients across all ranks
+        grads_to_bucket = []
+        params_with_grad = []
         for p in self._params_to_update.values():
-            if p.grad is not None:
-                if self._trainer.world_size > 1:
-                    dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+            grads_to_bucket.append(p.grad)
+            params_with_grad.append(p)
 
-                # Average by the global total number of samples
-                p.grad.div_(global_count)
+        if not grads_to_bucket:
+            return
+
+        # Flatten all gradients into one large tensor and make sure fp32 is used
+        flat_grad = _flatten_dense_tensors(grads_to_bucket).float()
+
+        # Sum grads across ranks
+        if self._trainer.world_size > 1:
+            dist.all_reduce(flat_grad, op=dist.ReduceOp.SUM)
+
+        # Average by number of samples
+        flat_grad.div_(global_count)
+
+        new_grads = _unflatten_dense_tensors(flat_grad, grads_to_bucket)
+
+        for p, new_grad in zip(params_with_grad, new_grads):
+            p.grad.copy_(new_grad)
 
     @torch.no_grad()
     def log_average_grad_norm(self):
