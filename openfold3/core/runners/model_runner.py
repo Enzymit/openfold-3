@@ -115,7 +115,8 @@ class ModelRunner(pl.LightningModule):
 
         return loss
 
-    def on_before_zero_grad(self, *args, **kwargs):
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        # Called after optimizer step
         self.ema.update(self.model)
 
     def eval_step(self, batch, batch_idx):

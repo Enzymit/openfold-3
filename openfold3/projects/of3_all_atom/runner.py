@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
-from pytorch_lightning.trainer import call
+from pytorch_lightning.strategies import DDPStrategy, DeepSpeedStrategy
 from torchmetrics import MeanMetric, MetricCollection, PearsonCorrCoef
 
 from openfold3.core.loss.loss_module import OpenFold3Loss
@@ -57,7 +57,6 @@ from openfold3.projects.of3_all_atom.model import OpenFold3
 deepspeed_is_installed = importlib.util.find_spec("deepspeed") is not None
 if deepspeed_is_installed:
     import deepspeed
-    from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 logger = logging.getLogger(__name__)
 
@@ -333,8 +332,8 @@ class OpenFold3AllAtom(ModelRunner):
             "Currently only local batch size of 1 per GPU is supported."
         )
 
-        assert not self.deepspeed_is_initialized, (
-            "Per-sample gradient clipping is not supported with DeepSpeed."
+        assert isinstance(self.trainer.strategy, DDPStrategy), (
+            "Per-sample gradient clipping is only supported with DDPStrategy."
         )
 
         example_feat = next(
@@ -395,19 +394,8 @@ class OpenFold3AllAtom(ModelRunner):
 
                 self.grad_manager.log_average_grad_norm()
 
-                # Manually call this hook since it's bypassed in manual opt loop
-                call._call_lightning_module_hook(
-                    self.trainer, "on_before_optimizer_step", opt
-                )
-
                 opt.step()
                 self.lr_schedulers().step()
-
-                # Manually trigger the `on_before_zero_grad` hook after the step
-                # Ensures EMA uses the latest weights, despite hook name timing
-                call._call_lightning_module_hook(
-                    self.trainer, "on_before_zero_grad", opt
-                )
 
                 # Zero the grad accumulator
                 self.grad_manager.reset_accumulator()
@@ -508,17 +496,6 @@ class OpenFold3AllAtom(ModelRunner):
         return self._training_step(batch=batch)
 
     def eval_step(self, batch, batch_idx):
-        # At the start of validation, load the EMA weights
-        if self.cached_weights is None:
-            # model.state_dict() contains references to model weights rather
-            # than copies. Therefore, we need to clone them before calling
-            # load_state_dict().
-            def clone_param(t):
-                return t.detach().clone()
-
-            self.cached_weights = tensor_tree_map(clone_param, self.model.state_dict())
-            self.model.load_state_dict(self.ema.state_dict()["params"])
-
         pdb_id = batch["pdb_id"]
         is_repeated_sample = batch.get("repeated_sample")
         if is_repeated_sample:
@@ -576,9 +553,19 @@ class OpenFold3AllAtom(ModelRunner):
                 f"{self.trainer.train_dataloader.dataset.indices=}"
             )
 
-    @property
-    def deepspeed_is_initialized(self):
-        return deepspeed_is_installed and deepspeed.comm.comm.is_initialized()
+    def on_validation_epoch_start(self):
+        # At the start of validation, load the EMA weights
+
+        assert self.cached_weights is None
+
+        # model.state_dict() contains references to model weights rather
+        # than copies. Therefore, we need to clone them before calling
+        # load_state_dict().
+        self.cached_weights = tensor_tree_map(
+            lambda t: t.detach().clone(), self.model.state_dict()
+        )
+
+        self.model.load_state_dict(self.ema.state_dict()["params"])
 
     def on_before_optimizer_step(self, *args, **kwargs):
         """Logs the single-transition layer linear_out gradients.
@@ -620,7 +607,7 @@ class OpenFold3AllAtom(ModelRunner):
                 block = self.model.pairformer_stack.blocks[idx]
                 param = block.single_transition.linear_out.weight
 
-                if self.deepspeed_is_initialized:
+                if isinstance(self.trainer.strategy, DeepSpeedStrategy):
                     # Needs to be called on every rank to avoid hanging
                     # https://github.com/deepspeedai/DeepSpeed/issues/7117#issuecomment-2717974187
                     grad = deepspeed.utils.safe_get_full_grad(param)
@@ -713,21 +700,12 @@ class OpenFold3AllAtom(ModelRunner):
     def configure_optimizers(self) -> dict:
         optimizer_config = self.config.settings.optimizer
 
-        if deepspeed_is_installed and optimizer_config.use_deepspeed_adam:
-            optimizer = DeepSpeedCPUAdam(
-                self.parameters(),
-                lr=optimizer_config.learning_rate,
-                betas=(optimizer_config.beta1, optimizer_config.beta2),
-                eps=optimizer_config.eps,
-                adamw_mode=False,
-            )
-        else:
-            optimizer = torch.optim.Adam(
-                self.model.parameters(),
-                lr=optimizer_config.learning_rate,
-                betas=(optimizer_config.beta1, optimizer_config.beta2),
-                eps=optimizer_config.eps,
-            )
+        optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=optimizer_config.learning_rate,
+            betas=(optimizer_config.beta1, optimizer_config.beta2),
+            eps=optimizer_config.eps,
+        )
 
         if self.last_lr_step != -1:
             for group in optimizer.param_groups:

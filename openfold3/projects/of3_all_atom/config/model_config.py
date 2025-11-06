@@ -128,7 +128,6 @@ model_config = mlc.ConfigDict(
             "clear_cache_between_steps": False,
             "train_confidence_only": train_confidence_only,
             "optimizer": {
-                "use_deepspeed_adam": False,
                 "learning_rate": 1.8e-3,
                 "beta1": 0.9,
                 "beta2": 0.95,
