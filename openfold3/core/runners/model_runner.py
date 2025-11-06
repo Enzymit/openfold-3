@@ -118,7 +118,9 @@ class ModelRunner(pl.LightningModule):
     def on_train_batch_end(self, outputs, batch, batch_idx):
         # Update EMA weights after optimizer step
         # Skip grad accumulation steps
-        is_last_step_of_cycle = (batch_idx + 1) % self.trainer.accumulate_grad_batches == 0
+        is_last_step_of_cycle = (
+            batch_idx + 1
+        ) % self.trainer.accumulate_grad_batches == 0
         if is_last_step_of_cycle or self.trainer.is_last_batch:
             self.ema.update(self.model)
 
