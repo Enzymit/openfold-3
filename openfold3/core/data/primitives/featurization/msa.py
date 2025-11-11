@@ -314,7 +314,7 @@ def create_msa_token_mapper(atom_array: AtomArray, chain_id: str) -> MsaTokenMap
 def map_msas_to_tokens(
     msa_feature_precursor: MsaFeaturePrecursorOF3,
     msa_array_vstack: MsaArray,
-    msa_array_vstack_mask: np.ndarray[int],
+    msa_array_vstack_mask: np.ndarray[int] | None,
     profile: np.ndarray[float],
     del_mean: np.ndarray[float],
     msa_token_mapper: MsaTokenMapper,
@@ -327,9 +327,9 @@ def map_msas_to_tokens(
             The pre-allocted MSA feature precursor container.
         msa_array_vstack (MsaArray):
             The vertically stacked MSA array for the chain.
-        msa_array_vstack_mask (np.ndarray[int]):
+        msa_array_vstack_mask (np.ndarray[int] | None):
             Mask for padding MSA features of the current chain to the max number
-            of rows across all chains.
+            of rows across all chains
         profile (np.ndarray[float]):
             The profile of the MSA - this is calculated based on the uncropped main MSA
             only.
@@ -355,9 +355,10 @@ def map_msas_to_tokens(
     msa_feature_precursor.deletion_matrix[:, token_positions] = (
         msa_array_vstack.deletion_matrix[:, msa_column_positions]
     )
-    msa_feature_precursor.msa_mask[:, token_positions] = msa_array_vstack_mask[
-        :, msa_column_positions
-    ]
+    if msa_array_vstack_mask is not None:
+        msa_feature_precursor.msa_mask[:, token_positions] = msa_array_vstack_mask[
+            :, msa_column_positions
+        ]
     msa_feature_precursor.msa_profile[token_positions] = profile[
         msa_column_positions, :
     ]
@@ -406,7 +407,7 @@ def create_msa_feature_precursor_of3(
                 [msa_array_collection.row_counts["n_rows"], n_tokens]
             ),
             n_rows_paired=msa_array_collection.row_counts["n_rows_paired_cropped"] + 1,
-            msa_mask=np.zeros([msa_array_collection.row_counts["n_rows"], n_tokens]),
+            msa_mask=np.ones([msa_array_collection.row_counts["n_rows"], n_tokens]),
             msa_profile=np.zeros([n_tokens, len(STANDARD_RESIDUES_WITH_GAP_1)]),
             deletion_mean=np.zeros(n_tokens),
         )
@@ -419,7 +420,7 @@ def create_msa_feature_precursor_of3(
             )
 
             # Crop and vertically stack query, paired MSA and main MSA arrays
-            msa_array_vstack, msa_array_vstack_mask = crop_vstack_msa_arrays(
+            msa_array_vstack, _ = crop_vstack_msa_arrays(
                 msa_array_collection,
                 chain_id,
             )
@@ -430,7 +431,7 @@ def create_msa_feature_precursor_of3(
             map_msas_to_tokens(
                 msa_feature_precursor=msa_feature_precursor,
                 msa_array_vstack=msa_array_vstack,
-                msa_array_vstack_mask=msa_array_vstack_mask,
+                msa_array_vstack_mask=None,
                 profile=profile,
                 del_mean=del_mean,
                 msa_token_mapper=msa_token_mapper,
@@ -445,7 +446,7 @@ def create_msa_feature_precursor_of3(
             * np.where(np.array(STANDARD_RESIDUES_WITH_GAP_1) == "-")[0].item(),
             deletion_matrix=np.zeros([1, n_tokens]),
             n_rows_paired=1,
-            msa_mask=np.zeros([1, n_tokens]),
+            msa_mask=np.ones([1, n_tokens]),
             msa_profile=np.zeros([n_tokens, len(STANDARD_RESIDUES_WITH_GAP_1)]),
             deletion_mean=np.zeros(n_tokens),
         )
