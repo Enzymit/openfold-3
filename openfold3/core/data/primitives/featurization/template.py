@@ -151,7 +151,9 @@ def create_template_feature_precursor_of3(
 
                 template_idx += 1
             except Exception as e:
-                logger.warning(f"Skipping template with exception: {e}")
+                logger.exception(
+                    f"Failed to process template with exception, skipping: {e}"
+                )
                 continue
 
     return OF3TemplateFeaturePrecursor(
