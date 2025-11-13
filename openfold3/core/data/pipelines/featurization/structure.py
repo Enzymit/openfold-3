@@ -188,11 +188,11 @@ def featurize_structure_of3(
             if add_perm_features:
                 # Raise error during training and skip the sample
                 unique_input_asym_ids = torch.unique_consecutive(
-                    torch.tensor(chain_ids_token, dtype=torch.int32)
+                    torch.tensor(chain_ids_token.astype(int), dtype=torch.int32)
                 )
                 raise ValueError(
                     f"{warn_msg} Input IDs: {unique_input_asym_ids}, "
-                    f"Asym IDs:{unique_asym_ids}"
+                    f"Asym IDs: {unique_asym_ids}"
                 )
             else:
                 logger.warning(warn_msg)

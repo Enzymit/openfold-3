@@ -16,6 +16,7 @@
 
 import dataclasses
 import logging
+import traceback
 
 import biotite.structure as struc
 import numpy as np
@@ -151,8 +152,13 @@ def create_template_feature_precursor_of3(
 
                 template_idx += 1
             except Exception as e:
-                logger.exception(
-                    f"Failed to process template with exception, skipping: {e}"
+                tb = traceback.format_exc()
+                logger.warning(
+                    "-" * 40
+                    + "\n"
+                    + f"Failed to process template, skipping: {str(e)}\n"
+                    + f"Exception type: {type(e).__name__}\nTraceback: {tb}"
+                    + "-" * 40
                 )
                 continue
 
