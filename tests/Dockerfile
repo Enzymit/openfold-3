@@ -1,4 +1,4 @@
-FROM openfold-base
+FROM ghcr.io/aqlaboratory/openfold3-testing:latest
 
 COPY tests /opt/openfold3/tests
 COPY environments/development.txt /opt/openfold3/development.txt
