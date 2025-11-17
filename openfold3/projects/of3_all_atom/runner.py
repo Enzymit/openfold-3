@@ -345,9 +345,10 @@ class OpenFold3AllAtom(ModelRunner):
             "Currently only local batch size of 1 per GPU is supported."
         )
 
-        assert isinstance(self.trainer.strategy, DDPStrategy), (
-            "Per-sample gradient clipping is only supported with DDPStrategy."
-        )
+        if self.trainer.world_size > 1:
+            assert isinstance(self.trainer.strategy, DDPStrategy), (
+                "Per-sample gradient clipping is only supported with DDPStrategy."
+            )
 
         example_feat = batch["token_mask"]
         if self.ema.device != example_feat.device:
