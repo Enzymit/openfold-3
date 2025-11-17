@@ -512,7 +512,6 @@ def dockq(
     is_protein_atomized: torch.Tensor,
     is_rna_atomized: torch.Tensor,
     is_dna_atomized: torch.Tensor,
-    is_ligand_atomized: torch.Tensor,
     d_fnat: float = 5.0,
     d_irmsd: float = 10.0,
     d1: float = 8.5,
@@ -544,8 +543,6 @@ def dockq(
             Per-atom RNA mask [B, S, N_atom].
         is_dna_atomized (torch.Tensor):
             Per-atom DNA mask [B, S, N_atom].
-        is_ligand_atomized (torch.Tensor):
-            Per-atom ligand mask [B, S, N_atom].
         d_fnat (float, optional):
             Contact threshold for FNAT calculation. Defaults to 5.0.
         d_irmsd (float, optional):
@@ -570,8 +567,9 @@ def dockq(
     moltypes = ["protein", "rna", "dna"]
     chain_id_to_moltype = {}
 
+    is_polymer_atomized = is_protein_atomized + is_rna_atomized + is_dna_atomized
     chain_id_polymer = torch.unique(
-        asym_id_atomized[all_atom_mask.bool() & (~is_ligand_atomized.bool())]
+        asym_id_atomized[all_atom_mask.bool() & is_polymer_atomized.bool()]
     ).to(torch.int32)
 
     for moltype_mask_atomized, moltype in zip(
@@ -838,7 +836,6 @@ def dockq_full_complex(
     is_protein_atomized: torch.Tensor,
     is_rna_atomized: torch.Tensor,
     is_dna_atomized: torch.Tensor,
-    is_ligand_atomized: torch.Tensor,
     d_fnat: float = 5.0,
     d_irmsd: float = 10.0,
     d1: float = 8.5,
@@ -877,8 +874,6 @@ def dockq_full_complex(
             Per-atom RNA mask [B, S, N_atom].
         is_dna_atomized (torch.Tensor):
             Per-atom DNA mask [B, S, N_atom].
-        is_ligand_atomized (torch.Tensor):
-            Per-atom ligand mask [B, S, N_atom].
         d_fnat (float, optional):
             Contact threshold for FNAT calculation. Defaults to 5.0.
         d_irmsd (float, optional):
@@ -908,7 +903,6 @@ def dockq_full_complex(
         is_protein_atomized=is_protein_atomized,
         is_rna_atomized=is_rna_atomized,
         is_dna_atomized=is_dna_atomized,
-        is_ligand_atomized=is_ligand_atomized,
         d_fnat=d_fnat,
         d_irmsd=d_irmsd,
         d1=d1,
@@ -916,6 +910,7 @@ def dockq_full_complex(
     )
 
     out = {}
+    n_sample = pred_coords.shape[-3]
     moltype_pairs = list(combinations_with_replacement(["protein", "rna", "dna"], 2))
     aggregate_items = ["dockq_scores", "n_contacts", "n_if_res"]
     aggregator = {}
@@ -945,8 +940,14 @@ def dockq_full_complex(
         dockq_scores_weighted = torch.sum(dockq_scores * weights, dim=-1)
 
         metric_name = f"dockq_{moltype_pair[0]}_{moltype_pair[1]}"
-        out[f"{metric_name}_uw"] = dockq_scores_unweighted.unsqueeze(-1)
-        out[f"{metric_name}_w"] = dockq_scores_weighted.unsqueeze(-1)
+
+        # Expand to have shape [B, S] for model selection
+        out[f"{metric_name}_uw"] = dockq_scores_unweighted.unsqueeze(-1).expand(
+            -1, n_sample
+        )
+        out[f"{metric_name}_w"] = dockq_scores_weighted.unsqueeze(-1).expand(
+            -1, n_sample
+        )
 
     return out
 
@@ -2308,7 +2309,6 @@ def get_metrics(
                 is_protein_atomized=is_protein_atomized,
                 is_rna_atomized=is_rna_atomized,
                 is_dna_atomized=is_dna_atomized,
-                is_ligand_atomized=is_ligand_atomized,
             )
             metrics = metrics | dockq_metrics
 
