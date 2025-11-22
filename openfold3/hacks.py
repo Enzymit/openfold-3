@@ -13,7 +13,7 @@ def prep_deepspeed():
 
 def prep_cutlass():
     cutlass_lib_is_installed = importlib.util.find_spec("cutlass_library") is not None
-    cutlass_path = Path(os.environ.get("CUTLASS_PATH", "placeholder"))
+    cutlass_path = Path(os.environ.get("CUTLASS_PATH", PLACEHOLDER_PATH))
 
     # TODO: This check is for backward compatibility with the old local cutlass setup.
     #  Remove this and use pip installation only in the future.
