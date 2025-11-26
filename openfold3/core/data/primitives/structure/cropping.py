@@ -18,7 +18,7 @@ import logging
 from typing import NamedTuple
 
 import numpy as np
-from biotite.structure import Atom, AtomArray, get_chain_starts
+from biotite.structure import Atom, AtomArray
 from scipy.spatial.distance import cdist
 
 from openfold3.core.data.primitives.quality_control.logging_utils import (
@@ -35,44 +35,7 @@ from openfold3.core.data.primitives.structure.labels import (
 )
 from openfold3.core.data.resources.residues import MoleculeType
 
-NO_CROPPING_TOKEN_BUDGET_SENTINEL = -1
-
 logger = logging.getLogger(__name__)
-
-
-def get_small_ligand_chain_ids(
-    atom_array: AtomArray,
-    max_atoms: int = 5,
-) -> np.ndarray:
-    """Returns chain IDs of small ligands
-
-    The "smallness" of a ligand is determined by the number of atoms it consists of.
-
-    Args:
-        atom_array:
-            AtomArray containing the structure to get the small ligand chain IDs from.
-        max_atoms:
-            Maximum number of atoms for a ligand to be considered small. Default is 5.
-
-    Returns:
-        Array of unique chain IDs of small ligands.
-    """
-    ligand_array = atom_array[atom_array.molecule_type_id == MoleculeType.LIGAND]
-
-    if len(ligand_array) == 0:
-        return np.array([])
-
-    lig_chain_starts = get_chain_starts(ligand_array, add_exclusive_stop=True)
-    lig_chain_sizes = np.diff(lig_chain_starts)
-    small_lig_chain_idxs = np.where(lig_chain_sizes <= max_atoms)[0]
-    small_lig_chain_ids = ligand_array[lig_chain_starts[small_lig_chain_idxs]].chain_id
-
-    # TODO: Dev-only, remove later
-    assert np.unique(small_lig_chain_ids).size == small_lig_chain_ids.size, (
-        "Small ligand chain IDs are not unique"
-    )
-
-    return small_lig_chain_ids
 
 
 def precrop_chains(
@@ -80,7 +43,6 @@ def precrop_chains(
     n_chains: int = 20,
     preferred_chain_or_interface: str | list[str, str] | None = None,
     interface_distance_threshold: float = 15.0,
-    ignore_ligands_below: int | float | None = None,
     ligand_inclusion_distance: float = 5.0,
 ) -> AtomArray:
     """Subsets structures with too many chains to N chains
@@ -88,6 +50,8 @@ def precrop_chains(
     Follows 2.5.4 of the AlphaFold3 SI. Will select a random interface token center atom
     and return the closest N chains based on minimum distances between any token center
     atoms, therefore acting as an initial fixed precropping of too-large assemblies.
+    Note that we do not count ligand chains towards the N chain limit, and include all
+    ligands within a specified distance of the selected N chains.
 
     Requires the 'token_center_atom' annotation created by the tokenizer function.
 
@@ -101,30 +65,26 @@ def precrop_chains(
             Distance threshold in Å that an interface token center atom must have to any
             token center atom in another chain to be considered an interface token
             center atom
-        ignore_ligands_below:
-            Any ligands with fewer atoms than this number will be excluded from
-            the precrop chain count. Instead, they will be included based on
-            proximity to the selected chains in the subset. Set to float('inf')
-            or None to never count any ligands toward the chain budget. Default
-            is None (ignore all ligands).
         ligand_inclusion_distance:
-            Distance threshold in Å when adding ligands excluded by
-            `ignore_ligands_below` back into the precrop. Any such ligand with
-            a distance ≤ this threshold to any retained chain will be included.
+            Distance threshold in Å when adding ligands back into the final structure.
+            Any ligand with a distance ≤ this threshold to a retained chain will be
+            included.
 
     Returns:
-        AtomArray with the closest n_chains based on token center atom distances,
-        plus any nearby small ligands.
+        AtomArray with the closest n_chains based on token center atom distances, plus
+        any nearby ligands.
     """
-    # 1) Check if precropping is necessary
-    small_ligand_chains = get_small_ligand_chain_ids(
-        atom_array, max_atoms=ignore_ligands_below - 1
-    )
-    n_effective_chains = len(np.unique(atom_array.chain_id)) - len(small_ligand_chains)
+    logger.info("Running precropping.")
     
+    # 1) Check if precropping is necessary
+    atom_array_lig = atom_array[atom_array.molecule_type_id == MoleculeType.LIGAND]
+
+    n_ligand_chains = len(np.unique(atom_array_lig.chain_id))
+    n_effective_chains = len(np.unique(atom_array.chain_id)) - n_ligand_chains
+
     if n_effective_chains <= n_chains:
         return atom_array
-    
+
     # 2) Get resolved and preferred token center atoms
     token_center_atoms, preferred_token_center_atoms = (
         get_resolved_and_preferred_token_center_atoms(
@@ -149,15 +109,10 @@ def precrop_chains(
 
     reference_atom = np.random.choice(preferred_token_center_atoms)
 
-    # 4) Hold out ligands of custom size before selecting proximal chains
-    small_ligand_tokc_mask = np.isin(token_center_atoms.chain_id, small_ligand_chains)
-    token_center_atoms = token_center_atoms[~small_ligand_tokc_mask]
-    if len(token_center_atoms) == 0:
-        logger.warning(
-            "No token center atoms remain after excluding ligands; returning the "
-            "original AtomArray without precropping."
-        )
-        return atom_array
+    # 4) Hold out ligands before selecting proximal chains
+    token_center_atoms = token_center_atoms[
+        token_center_atoms.molecule_type_id != MoleculeType.LIGAND
+    ]
 
     # 5) Compute distances to all remaining token centers
     dists = cdist(
@@ -187,10 +142,10 @@ def precrop_chains(
     closest_chain_ids = chain_ids_sorted[closest_idxs]
 
     # 7) Create mask for closest N chains on the original AtomArray
-    n_chain_mask = np.isin(atom_array.chain_id, closest_chain_ids)
+    nn_chain_mask = np.isin(atom_array.chain_id, closest_chain_ids)
 
     # 8) Build initial subset
-    atom_array_subset = atom_array[n_chain_mask]
+    atom_array_nn_chains = atom_array[nn_chain_mask]
 
     # 9) Ensure preferred chain/interface is always included
     preferred_chain_ids = []
@@ -200,32 +155,27 @@ def precrop_chains(
         preferred_chain_ids.extend(preferred_chain_or_interface)
     preferred_chain_ids = np.array(preferred_chain_ids)
 
-    # 10) Re-include small ligands by proximity
-    small_ligand_mask = np.isin(atom_array.chain_id, small_ligand_chains)
-    atom_array_small_lig = atom_array[small_ligand_mask]
-
-    if len(atom_array_small_lig) == 0:
-        proximal_small_lig_chain_ids = np.array([])
+    # 10) Re-include ligands by proximity
+    if len(atom_array_lig) == 0:
+        proximal_lig_chain_ids = np.array([])
     else:
-        _, proximal_small_lig_chain_pairs = get_query_interface_atom_pair_idxs(
-            query_atom_array=atom_array_small_lig,
-            target_atom_array=atom_array_subset,
+        _, proximal_lig_chain_pairs = get_query_interface_atom_pair_idxs(
+            query_atom_array=atom_array_lig,
+            target_atom_array=atom_array_nn_chains,
             distance_threshold=ligand_inclusion_distance,
             return_chain_pairs=True,
         )
-        if proximal_small_lig_chain_pairs is None:
-            proximal_small_lig_chain_ids = np.array([])
+        if proximal_lig_chain_pairs is None:
+            proximal_lig_chain_ids = np.array([])
         else:
-            proximal_small_lig_chain_ids = np.unique(
-                np.array(proximal_small_lig_chain_pairs[:, 0])
-            )
+            proximal_lig_chain_ids = np.unique(np.array(proximal_lig_chain_pairs[:, 0]))
 
     # 11) Reinclude all appropriate chains
-    reinclude_chain_ids = np.union1d(proximal_small_lig_chain_ids, preferred_chain_ids)
+    reinclude_chain_ids = np.union1d(proximal_lig_chain_ids, preferred_chain_ids)
 
     # Add chains back in
     reinclude_mask = np.isin(atom_array.chain_id, reinclude_chain_ids)
-    final_mask = n_chain_mask | reinclude_mask
+    final_mask = nn_chain_mask | reinclude_mask
     return atom_array[final_mask]
 
 
@@ -691,7 +641,6 @@ def precrop_and_set_crop_mask(
             interface_distance_threshold=precrop_settings[
                 "interface_distance_threshold"
             ],
-            ignore_ligands_below=precrop_settings["ignore_ligands_below"],
             ligand_inclusion_distance=precrop_settings["ligand_inclusion_distance"],
         )
 

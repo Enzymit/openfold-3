@@ -127,7 +127,6 @@ class CropWeights(BaseModel):
 class PrecropSettings(BaseModel):
     enabled: bool = False
     n_chains: int = 20
-    ignore_ligands_below: int = 6
     interface_distance_threshold: float = 15.0
     ligand_inclusion_distance: float = 5.0
 
