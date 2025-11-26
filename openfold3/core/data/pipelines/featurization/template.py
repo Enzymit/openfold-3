@@ -18,6 +18,7 @@ import numpy as np
 import torch
 from biotite.structure import AtomArray
 
+from openfold3.core.data.primitives.featurization.padding import pad_token_dim
 from openfold3.core.data.primitives.featurization.structure import (
     extract_starts_entities,
 )
@@ -99,7 +100,9 @@ def featurize_template_structures_of3(
     token_starts = token_starts_with_stop[:-1]
     chain_ids_token = atom_array.chain_id[token_starts]
     _, renum_ids = np.unique(chain_ids_token, return_inverse=True)
-    asym_id = torch.tensor(renum_ids + 1, dtype=torch.int32)
+    asym_id = pad_token_dim(
+        {"asym_id": torch.tensor(renum_ids + 1, dtype=torch.int32)}, n_tokens
+    )["asym_id"]
     multichain_pair_mask = (asym_id[..., None] == asym_id[..., None, :])[
         ..., None, :, :, None
     ]

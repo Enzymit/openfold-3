@@ -41,7 +41,6 @@ from openfold3.core.data.pipelines.featurization.msa import (
     MsaFeaturizerOF3Config,
 )
 from openfold3.core.data.pipelines.featurization.structure import (
-    TOKEN_DIM_INDEX_MAP,
     featurize_structure_of3,
 )
 from openfold3.core.data.pipelines.featurization.template import (
@@ -207,7 +206,6 @@ class InferenceDataset(Dataset):
         target_structure_features = featurize_structure_of3(
             atom_array=atom_array,
             n_tokens=n_tokens,
-            token_dim_index_map=TOKEN_DIM_INDEX_MAP,
             is_gt=False,
             add_perm_features=False,
         )

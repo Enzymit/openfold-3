@@ -501,22 +501,36 @@ def map_token_pos_to_template_residues(
     # Expand residues tokenized per atom
     _, repeats = np.unique(query_token_atoms_aligned_cropped.res_id, return_counts=True)
 
-    # Skip template if query and template are still misaligned, this can happen due to
-    # unhandled multi-occupancy residues or author annotation errors
-    # TODO: add fixes and logging for these cases
-    has_multioccupancy_residue = (
-        struc.get_residue_starts(atom_array_cropped_template).shape != repeats.shape
-    )
-    if has_multioccupancy_residue:
-        template_slice = None
-
-    else:
-        # Add token position annotation to template atom array mapping to the crop
-        template_slice = TemplateSlice(
-            atom_array=atom_array_cropped_template,
-            query_token_positions=query_token_atoms_aligned_cropped.token_position,
-            template_residue_repeats=repeats,
+    # Select highest occupancy residue for multi-occupancy residues
+    residue_starts = struc.get_residue_starts(atom_array_cropped_template)
+    if residue_starts.shape != repeats.shape:
+        # sort 1st by residue id and 2nd by descending per-residue occupancy
+        res_ids_multi_occ = atom_array_cropped_template[residue_starts].res_id
+        occ_sums = np.add.reduceat(
+            atom_array_cropped_template.occupancy, residue_starts
         )
+        order = np.lexsort((-occ_sums, res_ids_multi_occ))
+        res_ids_sorted = res_ids_multi_occ[order]
+
+        # keep first occurrence per residue id
+        order_to_keep = order[
+            np.concatenate(([True], res_ids_sorted[1:] != res_ids_sorted[:-1]))
+        ]
+        mask_singleocc = np.isin(
+            np.repeat(
+                np.arange(residue_starts.shape[0]),
+                np.diff(np.append(residue_starts, len(atom_array_cropped_template))),
+            ),
+            order_to_keep,
+        )
+        atom_array_cropped_template = atom_array_cropped_template[mask_singleocc]
+
+    # Add token position annotation to template atom array mapping to the crop
+    template_slice = TemplateSlice(
+        atom_array=atom_array_cropped_template,
+        query_token_positions=query_token_atoms_aligned_cropped.token_position,
+        template_residue_repeats=repeats,
+    )
 
     # Add to list of cropped + aligned template atom arrays for this chain
     if template_slice is not None:
