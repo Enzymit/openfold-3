@@ -253,17 +253,24 @@ def create_template_precache_of3(
     )
 
     # Compute precache
-    with mp.Pool(num_workers) as pool:
-        for _ in tqdm(
-            pool.imap_unordered(
-                wrapped_template_precache_constructor,
-                template_pdb_ids,
-                chunksize=1,
-            ),
-            total=len(template_pdb_ids),
+    if num_workers > 1:
+        with mp.Pool(num_workers) as pool:
+            for _ in tqdm(
+                pool.imap_unordered(
+                    wrapped_template_precache_constructor,
+                    template_pdb_ids,
+                    chunksize=1,
+                ),
+                total=len(template_pdb_ids),
+                desc="1/3: Creating template sequence cache",
+            ):
+                pass
+    else:
+        for template_pdb_id in tqdm(
+            template_pdb_ids,
             desc="1/3: Creating template sequence cache",
         ):
-            pass
+            wrapped_template_precache_constructor(template_pdb_id)
 
 
 # TODO: clean up this function!
@@ -454,90 +461,99 @@ def create_template_cache_entry_for_query(
     template_hits_filtered = {}
     for idx, hit in hits.items():
         hit_pdb_id, hit_chain_id = hit.name.split("_")
+        try:
+            # Skip query
+            if idx == 0:
+                template_process_logger.info(f"Skipping query {hit_pdb_id}.")
+                continue
+            # Skip templates whose precache is missing
+            if hit_pdb_id in precache_missing:
+                continue
 
-        # Skip query
-        if idx == 0:
-            template_process_logger.info(f"Skipping query {hit_pdb_id}.")
-            continue
-        # Skip templates whose precache is missing
-        if hit_pdb_id in precache_missing:
-            continue
+            # 1. Apply sequence filters: AF3 SI Section 2.4
+            fails_sequence_filters, query_aln, hit_aln = check_sequence(
+                query=query, hit=hit
+            )
+            if fails_sequence_filters:
+                template_process_logger.info(
+                    f"Template {hit_pdb_id} sequence does not pass sequence"
+                    " filters. Skipping this template."
+                )
+                continue
+            else:
+                data_log["n_templates_pass_seq_filters"] += 1
 
-        # 1. Apply sequence filters: AF3 SI Section 2.4
-        fails_sequence_filters, query_aln, hit_aln = check_sequence(
-            query=query, hit=hit
-        )
-        if fails_sequence_filters:
+            # 2. Parse structure
+            # The template is skipped if the structure identified by the PDB ID of the
+            # corresponding hit in the alignment file is not provided in
+            # template_structures_path
+            precache_entry_path = template_precache_directory / Path(
+                f"{hit_pdb_id}.npz"
+            )
+            if precache_entry_path.exists():
+                template_precache = np.load(
+                    precache_entry_path,
+                    allow_pickle=True,
+                )
+                chain_id_seq_map = template_precache["chain_id_seq_map"].item()
+                release_date = template_precache["release_date"].item()
+                data_log["n_templates_has_precache"] += 1
+            else:
+                template_process_logger.info(
+                    f"Precache for template structure {hit_pdb_id} not found in "
+                    f"{template_precache_directory}. Skipping this template."
+                )
+                precache_missing.add(hit_pdb_id)
+                continue
+
+            # 3. Parse template chain and sequence
+            # the template is skipped if its HMM sequence cannot be mapped
+            # exactly to a subsequence of ANY chain in the CIF file provided in
+            # template_structures_path with a PDB ID matching the the hit's PDB ID
+            # in the alignment file
+            # !!! Note that the chain ID-sequence map for this step is derived from the
+            # unprocessed CIF file provided in the template_structures_directory
+            hit_chain_id_matched, hit_seq_full = match_template_chain_and_sequence(
+                chain_id_seq_map, hit
+            )
+            if hit_chain_id_matched is None:
+                template_process_logger.info(
+                    f"Could not match template {hit_pdb_id} chain {hit_chain_id} "
+                    f"sequence in {chain_id_seq_map}. Skipping this template."
+                )
+                continue
+            else:
+                data_log["n_template_chain_match"] += 1
+
+            # Create residue index map
+            idx_map = create_residue_idx_map(
+                query_aln.astype("U1"),
+                hit_aln.astype("U1"),
+                query_seq_full,
+                hit_seq_full,
+            )
+
+            # Store as filtered hit
+            # hmmsearch is sorted in descending e-value order so index is enough to sort
+            template_hits_filtered[f"{hit_pdb_id}_{hit_chain_id_matched}"] = {
+                "index": hit.index,
+                "release_date": release_date,
+                "idx_map": idx_map,
+            }
+
+            # Break if max templates reached
+            if len(template_hits_filtered) == max_templates_construct:
+                template_process_logger.info(
+                    f"Max number of templates ({max_templates_construct}) reached."
+                )
+                break
+        except Exception as e:
             template_process_logger.info(
-                f"Template {hit_pdb_id} sequence does not pass sequence"
-                " filters. Skipping this template."
+                f"Failed to process template {hit_pdb_id} for query "
+                f"{query_pdb_id}_{query_chain_id}:\n{e}\nTraceback: \n"
+                f"{traceback.format_exc()}"
             )
             continue
-        else:
-            data_log["n_templates_pass_seq_filters"] += 1
-
-        # 2. Parse structure
-        # The template is skipped if the structure identified by the PDB ID of the
-        # corresponding hit in the alignment file is not provided in
-        # template_structures_path
-        precache_entry_path = template_precache_directory / Path(f"{hit_pdb_id}.npz")
-        if precache_entry_path.exists():
-            template_precache = np.load(
-                precache_entry_path,
-                allow_pickle=True,
-            )
-            chain_id_seq_map = template_precache["chain_id_seq_map"].item()
-            release_date = template_precache["release_date"].item()
-            data_log["n_templates_has_precache"] += 1
-        else:
-            template_process_logger.info(
-                f"Precache for template structure {hit_pdb_id} not found in "
-                f"{template_precache_directory}. Skipping this template."
-            )
-            precache_missing.add(hit_pdb_id)
-            continue
-
-        # 3. Parse template chain and sequence
-        # the template is skipped if its HMM sequence cannot be mapped
-        # exactly to a subsequence of ANY chain in the CIF file provided in
-        # template_structures_path with a PDB ID matching the the hit's PDB ID
-        # in the alignment file
-        # !!! Note that the chain ID-sequence map for this step is derived from the
-        # unprocessed CIF file provided in the template_structures_directory
-        hit_chain_id_matched, hit_seq_full = match_template_chain_and_sequence(
-            chain_id_seq_map, hit
-        )
-        if hit_chain_id_matched is None:
-            template_process_logger.info(
-                f"Could not match template {hit_pdb_id} chain {hit_chain_id} "
-                f"sequence in {chain_id_seq_map}. Skipping this template."
-            )
-            continue
-        else:
-            data_log["n_template_chain_match"] += 1
-
-        # Create residue index map
-        idx_map = create_residue_idx_map(
-            query_aln.astype("U1"),
-            hit_aln.astype("U1"),
-            query_seq_full,
-            hit_seq_full,
-        )
-
-        # Store as filtered hit
-        # hmmsearch is sorted in descending e-value order so index is enough to sort
-        template_hits_filtered[f"{hit_pdb_id}_{hit_chain_id_matched}"] = {
-            "index": hit.index,
-            "release_date": release_date,
-            "idx_map": idx_map,
-        }
-
-        # Break if max templates reached
-        if len(template_hits_filtered) == max_templates_construct:
-            template_process_logger.info(
-                f"Max number of templates ({max_templates_construct}) reached."
-            )
-            break
 
     # Save data log
     data_log["n_valid_templates_prefilter"] = len(template_hits_filtered)
@@ -758,17 +774,24 @@ def create_template_cache_of3(
         log_dir,
         s3_client_config,
     )
-    with mp.Pool(num_workers) as pool:
-        for _ in tqdm(
-            pool.imap_unordered(
-                wrapped_template_cache_constructor,
-                template_query_iterator,
-                chunksize=1,
-            ),
-            total=len(template_query_iterator),
+    if num_workers > 1:
+        with mp.Pool(num_workers) as pool:
+            for _ in tqdm(
+                pool.imap_unordered(
+                    wrapped_template_cache_constructor,
+                    template_query_iterator,
+                    chunksize=1,
+                ),
+                total=len(template_query_iterator),
+                desc="2/3: Creating template cache",
+            ):
+                pass
+    else:
+        for input_data in tqdm(
+            template_query_iterator,
             desc="2/3: Creating template cache",
         ):
-            pass
+            wrapped_template_cache_constructor(input_data)
     # Collate data logs
     collate_data_logs(
         log_dir, template_cache_dir.parent, "full_data_log_constructed_cache.tsv"
@@ -1085,18 +1108,39 @@ def filter_template_cache_of3(
         log_to_console,
         log_dir,
     )
-    with mp.Pool(num_workers) as pool:
-        for _, valid_templates in tqdm(
-            enumerate(
-                pool.imap_unordered(
-                    wrapped_template_cache_filter,
-                    template_query_iterator,
-                    chunksize=30,
-                )
-            ),
+    if num_workers > 1:
+        with mp.Pool(num_workers) as pool:
+            for _, valid_templates in tqdm(
+                enumerate(
+                    pool.imap_unordered(
+                        wrapped_template_cache_filter,
+                        template_query_iterator,
+                        chunksize=30,
+                    )
+                ),
+                total=data_iterator_len,
+                desc="3/3: Filtering template cache",
+            ):
+                # Update dataset cache with list of valid template representative IDs
+                for grp in valid_templates.items():
+                    try:
+                        (pdb_id, chain_id), valid_template_list = grp
+                        dataset_cache.structure_data[pdb_id].chains[
+                            chain_id
+                        ].template_ids = valid_template_list
+                    except Exception as e:
+                        print(f"Failed to update dataset cache for {grp}: \n{e}\n")
+
+                # if (idx + 1) % save_frequency == 0:
+                #     with open(updated_dataset_cache_file, "w") as f:
+                #         json.dump(dataset_cache, f, indent=4)
+    else:
+        for input_data in tqdm(
+            template_query_iterator,
             total=data_iterator_len,
             desc="3/3: Filtering template cache",
         ):
+            valid_templates = wrapped_template_cache_filter(input_data)
             # Update dataset cache with list of valid template representative IDs
             for grp in valid_templates.items():
                 try:
@@ -1106,10 +1150,6 @@ def filter_template_cache_of3(
                     ].template_ids = valid_template_list
                 except Exception as e:
                     print(f"Failed to update dataset cache for {grp}: \n{e}\n")
-
-            # if (idx + 1) % save_frequency == 0:
-            #     with open(updated_dataset_cache_file, "w") as f:
-            #         json.dump(dataset_cache, f, indent=4)
 
     # Save final complete dataset cache
     write_datacache_to_json(dataset_cache, updated_dataset_cache_file)
@@ -1415,17 +1455,25 @@ def preprocess_template_structures(
         log_to_console,
         log_dir,
     )
-    with mp.Pool(num_workers) as pool:
-        for _ in tqdm(
-            pool.imap_unordered(
-                wrapped_template_structure_preprocessor,
-                template_pdb_ids,
-                chunksize=chunksize,
-            ),
-            total=len(template_pdb_ids),
+    if num_workers > 1:
+        with mp.Pool(num_workers) as pool:
+            for _ in tqdm(
+                pool.imap_unordered(
+                    wrapped_template_structure_preprocessor,
+                    template_pdb_ids,
+                    chunksize=chunksize,
+                ),
+                total=len(template_pdb_ids),
+                desc="2/2: Preprocessing template structures",
+            ):
+                pass
+    else:
+        for template_pdb_id in tqdm(
+            template_pdb_ids,
             desc="2/2: Preprocessing template structures",
+            total=len(template_pdb_ids),
         ):
-            pass
+            wrapped_template_structure_preprocessor(template_pdb_id)
 
 
 # New template preprocessing pipelines

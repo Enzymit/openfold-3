@@ -171,7 +171,7 @@ def check_sequence(
     query_seq = query.hit_sequence.replace("-", "")
     hit_seq = hit.hit_sequence.replace("-", "")
     if len(hit_seq) < min_len:
-        return True
+        return True, None, None
     query_aln = np.frombuffer(
         query.hit_sequence.replace(".", "-").encode("ascii"), dtype="S1"
     )
@@ -188,7 +188,7 @@ def check_sequence(
     coverage = covered / (len(query_seq) or 1)
 
     if coverage < min_align:
-        return True
+        return True, None, None
 
     identical = (columns_to_keep & (query_not_gap == hit_not_gap)).sum()
 
@@ -284,7 +284,7 @@ def match_query_chain_and_sequence(
 
     # TODO: rework this logic, currently only 2 options are supported
     # Get the query sequence from the structure
-    if query_file_format == "fasta":
+    if (query_file_format == "fasta") or (query_file_format == "fa"):
         chain_id_seq_map = get_chain_id_to_seq_from_fasta(
             query_structures_directory
             / Path(f"{query_pdb_id}/{query_pdb_id}.{query_file_format}")
