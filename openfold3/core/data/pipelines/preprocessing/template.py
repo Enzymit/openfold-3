@@ -491,12 +491,12 @@ def create_template_cache_entry_for_query(
                 f"{hit_pdb_id}.npz"
             )
             if precache_entry_path.exists():
-                template_precache = np.load(
-                    precache_entry_path,
-                    allow_pickle=True,
-                )
-                chain_id_seq_map = template_precache["chain_id_seq_map"].item()
-                release_date = template_precache["release_date"].item()
+                with np.load(
+                    precache_entry_path, allow_pickle=True
+                ) as template_precache:
+                    chain_id_seq_map = template_precache["chain_id_seq_map"].item()
+                    release_date = template_precache["release_date"].item()
+
                 data_log["n_templates_has_precache"] += 1
             else:
                 template_process_logger.info(
@@ -866,9 +866,7 @@ def filter_template_cache_entry_for_query(
 
     # Parse template cache of the representative if available
     template_cache_file = template_cache_dir / Path(f"{rep_id}.npz")
-    if template_cache_file.exists():
-        template_cache = np.load(template_cache_file, allow_pickle=True)
-    else:
+    if not template_cache_file.exists():
         template_process_logger.info(
             f"Template cache for representative {rep_id} not found. Returning no valid "
             "templates."
@@ -884,10 +882,12 @@ def filter_template_cache_entry_for_query(
                 }
             )
 
-    # Sort by index/e-value
-    unpacked_template_cache = {
-        key: value.item() for key, value in template_cache.items()
-    }
+    with np.load(template_cache_file, allow_pickle=True) as template_cache:
+        # Sort by index/e-value
+        unpacked_template_cache = {
+            key: value.item() for key, value in template_cache.items()
+        }
+
     sorted_template_cache = sorted(
         unpacked_template_cache.items(), key=lambda x: x[1]["index"]
     )
@@ -1945,9 +1945,13 @@ class TemplatePreprocessor:
                         worker_logger.info(
                             f"Loading precache entry {precache_entry_file}."
                         )
-                    precache_entry = np.load(precache_entry_file, allow_pickle=True)
-                    chain_id_seq_map = precache_entry["chain_id_seq_map"].item()
-                    release_date = precache_entry["release_date"].item()
+
+                    with np.load(
+                        precache_entry_file, allow_pickle=True
+                    ) as precache_entry:
+                        chain_id_seq_map = precache_entry["chain_id_seq_map"].item()
+                        release_date = precache_entry["release_date"].item()
+
                 # ii. from raw structure if not precached
                 else:
                     # Preprocess into per-chain arrays if prompted
@@ -2085,10 +2089,13 @@ class TemplatePreprocessor:
                 )
             if query_seq_hash in self.hash_template_id_map:
                 return
-            template_cache_entry = np.load(template_cache_entry_file, allow_pickle=True)
-            template_cache_entry = {
-                key: value.item() for key, value in template_cache_entry.items()
-            }
+
+            with np.load(
+                template_cache_entry_file, allow_pickle=True
+            ) as template_cache_npz:
+                template_cache_entry = {
+                    key: value.item() for key, value in template_cache_npz.items()
+                }
 
             self.hash_template_id_map[query_seq_hash] = list(
                 template_cache_entry.keys()
