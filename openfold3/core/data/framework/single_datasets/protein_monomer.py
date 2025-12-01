@@ -48,10 +48,6 @@ class ProteinMonomerDataset(BaseOF3Dataset):
         # Datapoint cache
         self.create_datapoint_cache()
 
-        # Dataset configuration
-        self.apply_crop = True
-        self.crop = dataset_config.crop.model_dump()
-
         # All samples are protein
         self.single_moltype = "PROTEIN"
 

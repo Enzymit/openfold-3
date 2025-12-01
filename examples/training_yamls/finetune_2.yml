@@ -60,11 +60,13 @@ dataset_configs:
           n_templates: 4
           take_top_k: false
         crop:
-          token_budget: 768
-          crop_weights:
-            contiguous: 0.2
-            spatial: 0.4
-            spatial_interface: 0.4
+          token_crop:
+            enabled: true
+            token_budget: 768
+            crop_weights:
+              contiguous: 0.2
+              spatial: 0.4
+              spatial_interface: 0.4
           chain_crop:
             enabled: true
         loss:
@@ -82,11 +84,13 @@ dataset_configs:
           take_top_k: false
         sample_in_order: true
         crop:
-          token_budget: 768 
-          crop_weights:
-            contiguous: 0.25
-            spatial: 0.75
-            spatial_interface: 0.0
+          token_crop:
+            enabled: true
+            token_budget: 768 
+            crop_weights:
+              contiguous: 0.25
+              spatial: 0.75
+              spatial_interface: 0.0
         loss:
           loss_weights:
             bond: 4.0
@@ -106,11 +110,13 @@ dataset_configs:
           take_top_k: false
         sample_in_order: true
         crop:
-          token_budget: 768 
-          crop_weights:
-            contiguous: 0.25
-            spatial: 0.75
-            spatial_interface: 0.0
+          token_crop:
+            enabled: true
+            token_budget: 768 
+            crop_weights:
+              contiguous: 0.25
+              spatial: 0.75
+              spatial_interface: 0.0
         loss:
           loss_weights:
             bond: 4.0
@@ -130,11 +136,13 @@ dataset_configs:
           take_top_k: false
         disable_non_protein_diffusion_weights: false  # set to F in fine tuning
         crop:
-          token_budget: 768
-          crop_weights:
-            contiguous: 0.2
-            spatial: 0.4
-            spatial_interface: 0.4
+          token_crop:
+            enabled: true
+            token_budget: 768
+            crop_weights:
+              contiguous: 0.2
+              spatial: 0.4
+              spatial_interface: 0.4
           chain_crop:
             enabled: true
         loss:
@@ -154,6 +162,9 @@ dataset_configs:
         template:
           n_templates: 4
           take_top_k: true
+        crop:
+          token_crop:
+            enabled: false
 
 dataset_paths:
   weighted-pdb:
