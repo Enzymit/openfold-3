@@ -331,7 +331,9 @@ class DataModule(pl.LightningDataModule):
                     key: value / sum(config_i_crop_weights.values())
                     for key, value in config_i_crop_weights.items()
                 }
-                print(f"{train_dataset_config.configs[idx].crop.token_crop.crop_weights=}")
+                print(
+                    f"{train_dataset_config.configs[idx].crop.token_crop.crop_weights=}"
+                )
 
     @classmethod
     def run_checks(cls, multi_dataset_config: MultiDatasetConfig) -> None:
