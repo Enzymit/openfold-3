@@ -104,13 +104,6 @@ class OpenFold3AllAtom(ModelRunner):
         self._setup_train_metrics()
         self._setup_val_metrics()
 
-        # Initialize the gradient manager if doing per-sample grad clipping
-        if self.per_sample_grad_clipping:
-            self.grad_manager.setup(
-                model=self.model, trainer=self.trainer, logger=self.logger
-            )
-            self._identify_confidence_params()
-
         # Keep grads enabled for confidence head parameters only
         if stage == "fit" and self.config.settings.train_confidence_only:
             exempt_submodule = [
@@ -121,6 +114,13 @@ class OpenFold3AllAtom(ModelRunner):
                 self.model.aux_heads.pae,
             ]
             self._freeze_model_params(exempt_submodule=exempt_submodule)
+
+        # Initialize the gradient manager if doing per-sample grad clipping
+        if self.per_sample_grad_clipping:
+            self.grad_manager.setup(
+                model=self.model, trainer=self.trainer, logger=self.logger
+            )
+            self._identify_confidence_params()
 
     def _freeze_model_params(self, exempt_submodule: list[torch.nn.Module]):
         """Freeze all model parameters excluding those specified in exempt_submodule."""
@@ -355,7 +355,7 @@ class OpenFold3AllAtom(ModelRunner):
         is_last_step_of_cycle = (batch_idx + 1) % accum_steps == 0
         return is_last_step_of_cycle or self.trainer.is_last_batch
 
-    def _get_disabled_param_names(self, loss_weights: dict) -> set | None:
+    def _get_sample_disabled_param_names(self, loss_weights: dict) -> set | None:
         """
         Returns a list of confidence head parameters that should be disabled
         when counting grads across ranks, else None.
@@ -438,7 +438,7 @@ class OpenFold3AllAtom(ModelRunner):
 
                 self.manual_backward(loss)
 
-                disabled_params = self._get_disabled_param_names(
+                disabled_params = self._get_sample_disabled_param_names(
                     loss_weights=batch["loss_weights"]
                 )
                 self.grad_manager.clip_and_accumulate(

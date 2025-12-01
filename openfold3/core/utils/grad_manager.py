@@ -138,12 +138,19 @@ class PerSampleGradManager:
             )
 
     @torch.no_grad()
-    def _clip_grads(self, logging_info: dict | None = None):
+    def _clip_grads(
+        self, logging_info: dict | None = None, disabled_params: set | None = None
+    ):
         """Clips the gradients currently stored in self._model.parameters()"""
+        if disabled_params is None:
+            disabled_params = set()
 
-        global_norm, params_with_grad = compute_global_norm(
-            parameters=self._params_to_update.values()
-        )
+        params_enabled = [
+            param
+            for name, param in self._params_to_update.items()
+            if name not in disabled_params
+        ]
+        global_norm, params_with_grad = compute_global_norm(parameters=params_enabled)
 
         if not params_with_grad:
             return
@@ -184,67 +191,49 @@ class PerSampleGradManager:
         by the active number of samples instead.
         """
         # Get effective batch size
-        local_count = torch.tensor(
-            self.accum_count, dtype=torch.float32, device=self.device
-        )
-        global_total_count = self._trainer.strategy.reduce(
+        local_count = torch.tensor(self.accum_count, device=self.device)
+        global_count = self._trainer.strategy.reduce(
             local_count, reduce_op=dist.ReduceOp.SUM
-        )
-        global_total_count = global_total_count.item()
+        ).item()
 
-        self.log_unclipped_grad_metrics(global_count=global_total_count)
+        self.log_unclipped_grad_metrics(global_count=global_count)
 
-        if global_total_count == 0:
+        if global_count == 0:
             # Zero the grads, they might contain stale values from the accumulator
             for p in self._params_to_update.values():
                 if p.grad is not None:
                     p.grad.zero_()
             return
 
-        # Ensure deterministic order for the count vector alignment
+        # Collect grads and parameters
         param_names = sorted(self._params_to_update.keys())
+        params = [self._params_to_update[n] for n in param_names]
+        grads = [p.grad for p in params]
 
-        grads_to_bucket = []
-        params_with_grad = []
-
-        for name in param_names:
-            p = self._params_to_update[name]
-            if p.grad is None:
-                p.grad = torch.zeros_like(p)
-            grads_to_bucket.append(p.grad)
-            params_with_grad.append(p)
-
-        if not grads_to_bucket:
+        if not grads:
             return
 
         # Per-parameter sample counts [N_params]
-        local_param_counts = [
-            self.parameter_participation_counts.get(name, 0) for name in param_names
+        local_counts = [
+            self.parameter_participation_counts.get(n, 0) for n in param_names
         ]
-        counts_tensor = torch.tensor(
-            local_param_counts, dtype=torch.float32, device=self.device
-        )
-
-        # Sum counts across ranks for each parameter
         global_active_counts = self._trainer.strategy.reduce(
-            counts_tensor, reduce_op=dist.ReduceOp.SUM
+            torch.tensor(local_counts, device=self.device), reduce_op=dist.ReduceOp.SUM
         )
 
-        # Sum grads across rank
-        # Flatten all gradients into one large tensor and make sure fp32 is used
-        flat_grad = _flatten_dense_tensors(grads_to_bucket).float()
-        flat_grad = self._trainer.strategy.reduce(
+        # Reduce gradients (flatten -> reduce -> unflatten)
+        flat_grad = _flatten_dense_tensors(grads).float()
+        reduced_flat = self._trainer.strategy.reduce(
             flat_grad, reduce_op=dist.ReduceOp.SUM
         )
+        summed_grads = _unflatten_dense_tensors(reduced_flat, grads)
 
-        summed_grads = _unflatten_dense_tensors(flat_grad, grads_to_bucket)
-
-        for i, (p, summed_grad) in enumerate(zip(params_with_grad, summed_grads)):
-            sample_count = global_active_counts[i]
-
-            if sample_count > 0:
+        # Average grads by active counts
+        for i, (p, summed_grad) in enumerate(zip(params, summed_grads)):
+            count = global_active_counts[i]
+            if count > 0:
                 # Average by actual sample count for that parameter
-                p.grad.copy_(summed_grad / sample_count)
+                p.grad.copy_(summed_grad / count)
             else:
                 # No samples used this parameter globally
                 p.grad.zero_()
@@ -270,22 +259,23 @@ class PerSampleGradManager:
                 If None, assumes all parameters are active.
         """
         # Clip the single-sample grads
-        self._clip_grads(logging_info=logging_info)
+        self._clip_grads(logging_info=logging_info, disabled_params=disabled_params)
 
         if disabled_params is None:
             disabled_params = set()
 
         # Manually accumulate clipped grads and track param participation
         for name, param in self._params_to_update.items():
+            if name in disabled_params:
+                continue
+
             if param.grad is not None:
                 self.grad_accumulator[name].add_(param.grad)
 
                 if name not in self.parameter_participation_counts:
                     self.parameter_participation_counts[name] = 0
 
-                # Determine if this parameter was active for this sample
-                is_active = 1 if name not in disabled_params else 0
-                self.parameter_participation_counts[name] += is_active
+                self.parameter_participation_counts[name] += 1
 
         # Increment the global counter (still used for logging)
         # TODO: Get rid of this later
