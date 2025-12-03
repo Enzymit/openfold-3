@@ -86,6 +86,10 @@ def _convert_molecule_type(value: Any) -> Any:
 
 
 def deep_update(base_dict: dict, update_dict: dict) -> dict:
+    """
+    Recursively updates base_dict with update_dict. If a key exists
+    in update_dict but not base_dict, it is added to base_dict.
+    """
     for key, value in update_dict.items():
         if (
             key in base_dict
