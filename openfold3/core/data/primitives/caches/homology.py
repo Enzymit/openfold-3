@@ -16,6 +16,7 @@ import subprocess as sp
 import tempfile
 from collections import defaultdict
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 from rdkit import Chem
@@ -156,6 +157,7 @@ def run_mmseqs_search(
     query_id_to_sequence: dict[str, str],
     target_id_to_sequence: dict[str, str],
     seq_identity_threshold: float = 0.4,
+    seq_identity_mode: Literal["global", "local"] = "global",
     sensitivity: float = 8.0,
     mmseqs_binary: str = "mmseqs",
     dbtype: int = 0,
@@ -213,18 +215,31 @@ def run_mmseqs_search(
         # Decide search setting by dbtype
         if dbtype == 1:
             search_type = 1  # amino acid
+            num_iterations = 3  # use profile search for proteins
         elif dbtype == 2:
             search_type = 3  # nucleotide
+            num_iterations = 1
         else:
             search_type = 0  # auto
+            num_iterations = 1
 
         # Run MMseqs2 search with high sensitivity and ensuring that all target
         # sequences can be included in the hits. Also prefilter by coverage wrt the
         # query sequence as that is guaranteed to be >= query sequence identity.
         cmd_search = (
-            f"{mmseqs_binary} search {db_query} {db_target} {db_result} "
-            f"{temp_dir}/tmp -s {sensitivity} --max-seqs {len(target_id_to_sequence)} "
-            f"--search-type {search_type} -c {seq_identity_threshold} --cov-mode 2"
+            f"{mmseqs_binary} search "
+            f"{db_query} "
+            f"{db_target} "
+            f"{db_result} "
+            f"{temp_dir}/tmp "
+            f"-s {sensitivity} "
+            f"--max-seqs {len(target_id_to_sequence)} "
+            f"--search-type {search_type} "
+            f"-c {seq_identity_threshold} "
+            "--cov-mode 2 "
+            f"--num-iterations {num_iterations} "
+            "-a "
+            "-e 100"  # rely mostly on seq identity and coverage filters
         )
         logger.info("Running MMseqs2 search.")
         sp.run(cmd_search, shell=True, check=True)
@@ -236,7 +251,7 @@ def run_mmseqs_search(
             f"{db_target} "
             f"{db_result} "
             f"{result_tsv} "
-            "--format-output 'query,target,pident,qcov'"
+            "--format-output 'query,target,fident,nident,qlen'"
         )
         logger.info("Converting MMseqs2 search results to TSV.")
         sp.run(cmd_convert, shell=True, check=True)
@@ -249,13 +264,21 @@ def run_mmseqs_search(
             logger.warning("MMseqs2 search returned no hits.")
             return {}
 
-        assert df[2].min() >= 0.0 and df[2].max() <= 1.0
+        assert df[2].min() >= 0.0 and df[2].max() <= 1.0  # assert column parsing
 
         logger.info("Filtering templates.")
         query_seq_id_to_homologs = {}
 
-        # Global query sequence identity = pident x qcov
-        query_sequence_identity = df[2] * df[3]
+        if seq_identity_mode == "global":
+            # Global query sequence identity = nident / qlen
+            query_sequence_identity = df[3] / df[4]
+        elif seq_identity_mode == "local":
+            query_sequence_identity = df[2]
+        else:
+            raise ValueError(
+                f"seq_identity_mode must be 'global' or 'local', got "
+                f"{seq_identity_mode}"
+            )
 
         high_identity = df[query_sequence_identity > seq_identity_threshold]
 
