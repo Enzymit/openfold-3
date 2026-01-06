@@ -295,9 +295,10 @@ class OF3DistributedSampler(DistributedSampler):
 
         logger.debug(
             f"CALLED OF3DistributedSampler.__iter__ in rank {self.rank}: "
-            f"epoch {self.epoch}, seed {self.seed + self.epoch}, sampled dataset indices "
-            f"{dataset_indices.tolist()}, sampled datapoint indices "
-            f"{datapoint_indices.tolist()}, indices_for_this_rank {indices_for_this_rank}"
+            f"epoch {self.epoch}, seed {self.seed + self.epoch}, sampled dataset "
+            f"indices {dataset_indices.tolist()}, sampled datapoint indices "
+            f"{datapoint_indices.tolist()}, indices_for_this_rank "
+            f"{indices_for_this_rank}."
         )
 
         for i in indices_for_this_rank:
