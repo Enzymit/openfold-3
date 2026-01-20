@@ -419,7 +419,9 @@ class TrainingExperimentRunner(ExperimentRunner):
         # If resuming from existing wandb run, do not manually load checkpoint
         if self.resume_existing_run:
             return False
-        return self.ckpt_load_settings.manual_checkpoint_loading
+        do_manual = self.ckpt_load_settings.manual_checkpoint_loading
+        logger.info(f"Manual checkpoint loading: {do_manual}")
+        return do_manual
 
     def manual_load_checkpoint(self):
         init_from_ema_weights = self.ckpt_load_settings.init_from_ema_weights
@@ -633,7 +635,7 @@ class InferenceExperimentRunner(ExperimentRunner):
                 completed_structures.append(query_id)
 
         logger.info(
-            "Skipping existing structures is enabled.Will skip "
+            "Skipping existing structures is enabled. Will skip "
             f"the following {len(completed_structures)} structures:"
             f" {completed_structures}"
         )
