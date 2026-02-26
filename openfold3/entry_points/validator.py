@@ -401,7 +401,7 @@ class InferenceExperimentConfig(ExperimentConfig):
                 "selecting default checkpoint."
             )
             self.inference_ckpt_name = DEFAULT_CHECKPOINT_NAME
-            return self
+        return self
 
     @model_validator(mode="after")
     def _try_default_ckpt_path(self):
