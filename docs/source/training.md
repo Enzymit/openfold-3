@@ -58,6 +58,12 @@ checkpoint_config:
 model_update:
   presets: 
     - train
+  custom:
+    architecture:
+      shared:
+        use_confidence_emb_prob: 0.8
+        diffusion:
+          use_conditioning_prob: 0.8
 
 dataset_configs:
   train:
@@ -146,7 +152,7 @@ To train on multiple GPUs within a single node, configure your YAML:
 
 ```yaml
 pl_trainer_args:
-  devices: 8      # Use all 8 GPUs
+  devices: 8      # GPUs per node
   num_nodes: 1
 ```
 

@@ -230,12 +230,12 @@ dataset_paths:
   short-monomer-distillation:
     alignments_directory: null
     alignment_db_directory: null
-    alignment_array_directory: /dcai/projects02/cu_0001/shared/openfold3/data/monomer_distillation_sets/short_monomers/preprocessed
-    target_structures_directory: /dcai/projects02/cu_0001/shared/openfold3/data/monomer_distillation_sets/short_monomers/preprocessed
+    alignment_array_directory: /shared/openfold3/monomer_distillation_sets_v2/short_monomers/preprocessed
+    target_structures_directory: /shared/openfold3/monomer_distillation_sets_v2/short_monomers/preprocessed
     target_structure_file_format: npz
-    dataset_cache_file: /dcai/projects02/cu_0001/shared/openfold3/data/monomer_distillation_sets/short_monomers/short_monomer_cache_2025_11_25_with_templates.json
-    reference_molecule_directory: /dcai/projects02/cu_0001/shared/openfold3/data/monomer_distillation_sets/shared/reference_mols
-    template_cache_directory: /dcai/projects02/cu_0001/shared/openfold3/data/monomer_distillation_sets/short_monomers/preprocessed
+    dataset_cache_file: /shared/openfold3/monomer_distillation_sets_v2/short_monomers/short_monomer_cache_2025_11_25_with_templates.json
+    reference_molecule_directory: /shared/openfold3/monomer_distillation_sets_v2/shared/reference_mols
+    template_cache_directory: /shared/openfold3/monomer_distillation_sets_v2/short_monomers/preprocessed
     template_structure_array_directory: /shared/openfold3/pdb_training_set/templates/template_structure_arrays
     template_structures_directory: null
     template_file_format: npz
