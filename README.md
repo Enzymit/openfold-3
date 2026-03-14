@@ -57,8 +57,6 @@ More information on how to customize your inference prediction can be found at o
 
 ## Benchmarking
 
-OpenFold3-preview performs competitively with the state of the art in open source biomolecular structure prediction, while being the only model to match AlphaFold3's performance on monomeric RNA structures.
-
 **OpenFold3-preview-2 results:**
 <picture>
   <source srcset="assets/of3p2-benchmarks-rnp.png">
@@ -81,6 +79,8 @@ Performance of OF3p2 and other models on a diverse set of benchmarks:
 For more details on inferences procedures and benchmarking methods, please refer to the [OpenFold3 Preview 2 whitepaper](https://portal.openfold.omsf.io/reports/of3p2_technical_report.pdf)
 
 **OpenFold3-preview results:**
+
+OpenFold3-preview performs competitively with the state of the art in open source biomolecular structure prediction, while being the only model to match AlphaFold3's performance on monomeric RNA structures.
 
 Performance of OF3p and other models on a diverse set of benchmarks:
 - Protein and RNA monomers from [CASP16](https://www.biorxiv.org/content/10.1101/2025.05.06.652459v2) and [Ludaic et al](https://www.biorxiv.org/content/10.1101/2025.04.30.651414v2)
