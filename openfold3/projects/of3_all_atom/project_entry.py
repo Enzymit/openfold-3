@@ -84,9 +84,7 @@ class OF3ProjectEntry:
             "are set to True. At most one subsampling strategy can be enabled."
         )
 
-    def get_model_config_with_update(
-        self, model_update: ModelUpdate | None = None
-    ) -> ConfigDict:
+    def get_model_config_with_update(self, model_update: ModelUpdate) -> ConfigDict:
         """Returns a model config with updates applied."""
         model_config = self.get_model_config_with_presets(model_update.presets)
         model_config.update(model_update.custom)
