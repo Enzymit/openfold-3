@@ -197,7 +197,6 @@ We provide several example runner files in our [examples directory](https://gith
 - Using low memory settings
 - Customizing output formats
 - Enabling cuEquivariance kernels
-- Enabling PAE (predicted aligned error) calculations
 - Saving MSA and Template processing outputs
 - And more
 
@@ -282,38 +281,10 @@ model_update:
   presets:
     - predict  # required for inference
     - low_mem
-    - pae_enabled
 ```
 
 ---
 
-#### 📊 Toggle PAE head model
-
-Predicted Aligned Error (PAE) is a predicted confidence metric from the OpenFold3 model that is used to compute predicted TM scores. You can find more information about confidence metrics [here](https://www.ebi.ac.uk/training/online/courses/alphafold/inputs-and-outputs/evaluating-alphafolds-predicted-structures-using-confidence-scores/confidence-scores-in-alphafold-multimer/).
-
-The PAE model head is enabled by default in inference by its selection in the model presets. The current models available from OpenFold all require `pae_enabled` as a setting.
-
-To disable PAE model, provide a list of model presets that does not include the `pae_enabled` preset, e.g.
-
-```yaml
-model_update:
-  presets:
-    - predict # required for inference 
-```
-
-Conversely, if you provide your own model_update and wish to use the PAE head, please ensure the `pae_enabled` preset is selected:
-
-```yaml
-model_update:
-  presets:
-    - predict  # required for inference
-    - low_mem  # default low memory settings
-    - pae_enabled  # required to run PAE head
-  custom:
-    - ... custom model changes
-```
-
----
 
 ### 3.4 Customized ColabFold MSA Server Settings Using `runner.yml` 
 
@@ -387,8 +358,6 @@ Each seed produces `l` (number of diffusion samples) structure predictions, and 
   - `avg_plddt` - Average pLDDT over structure
 
   - `gpde` - Global Predicted Distance Error (see AF3 SI Section 5.7 Eq. 16)
-
-  The following metrics are available only when `pae_enabled` is set. 
   
   - `ptm` - Predicted TM score of a full complex (SI §5.9.1)
 

@@ -614,10 +614,6 @@ class InferenceExperimentRunner(ExperimentRunner):
     def use_templates(self) -> bool:
         return self.experiment_config.experiment_settings.use_templates
 
-    @cached_property
-    def pae_enabled(self) -> bool:
-        return self.model_config.architecture.heads.pae.enabled
-
     def remove_completed_queries_from_query_set(self, inference_query_set):
         """Returns a new inference query set with previously completed runs removed."""
 
@@ -709,7 +705,6 @@ class InferenceExperimentRunner(ExperimentRunner):
         _callbacks = [
             OF3OutputWriter(
                 output_dir=self.output_dir,
-                pae_enabled=self.pae_enabled,
                 **self.output_writer_settings.model_dump(),
             ),
             PredictTimer(self.output_dir),

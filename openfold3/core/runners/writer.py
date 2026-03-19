@@ -73,7 +73,6 @@ class OF3OutputWriter(BasePredictionWriter):
     def __init__(
         self,
         output_dir: Path,
-        pae_enabled: bool = False,
         structure_format: str = "pdb",
         full_confidence_output_format: str = "json",
         write_features: bool = False,
@@ -81,7 +80,6 @@ class OF3OutputWriter(BasePredictionWriter):
     ):
         super().__init__(write_interval="batch")
         self.output_dir = output_dir
-        self.pae_enabled = pae_enabled
         self.structure_format = structure_format
         self.full_confidence_format = full_confidence_output_format
         self.write_features = write_features
@@ -181,11 +179,10 @@ class OF3OutputWriter(BasePredictionWriter):
         gpde = confidence_scores["gpde"]
         aggregated_confidence_scores = {"avg_plddt": np.mean(plddt), "gpde": gpde}
 
-        if self.pae_enabled:
-            logger.info("Recording PAE confidence outputs")
-            aggregated_confidence_scores |= self.get_pae_confidence_scores(
-                confidence_scores, atom_array
-            )
+        logger.info("Recording PAE confidence outputs")
+        aggregated_confidence_scores |= self.get_pae_confidence_scores(
+            confidence_scores, atom_array
+        )
 
         out_file_agg = Path(f"{output_prefix}_confidences_aggregated.json")
         out_file_agg.write_text(
