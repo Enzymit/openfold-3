@@ -32,7 +32,7 @@ from openfold3.projects.of3_all_atom.config.inference_query_format import (
 )
 from openfold3.tests.compare_utils import skip_unless_cuda_available
 
-pytestmark = pytest.mark.inference_verification
+pytestmark = [pytest.mark.inference_verification, pytest.mark.slow]
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
