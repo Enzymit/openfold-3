@@ -118,7 +118,12 @@ class TestPredictionWriter:
         return actual_full_scores
 
     def write_confidence_scores(
-        self, output_path, output_fmt, write_full_output, confidence_scores
+        self,
+        output_path,
+        output_fmt,
+        output_dtype,
+        write_full_output,
+        confidence_scores,
     ):
         atom_array = structure.AtomArray(5)
         atom_array.coord = np.zeros((5, 3))
@@ -127,6 +132,7 @@ class TestPredictionWriter:
         output_writer = OF3OutputWriter(
             output_dir=output_path,
             full_confidence_output_format=output_fmt,
+            full_confidence_output_dtype=output_dtype,
             write_full_confidence_scores=write_full_output,
         )
         output_prefix = output_path / "test"
@@ -135,15 +141,15 @@ class TestPredictionWriter:
         )
 
     @pytest.mark.parametrize(
-        "output_fmt",
-        ["json", "npz"],
+        "output_fmt, output_dtype",
+        [("json", "float32"), ("npz", "float32"), ("npz", "float16")],
         ids=lambda x: x,
     )
     def test_full_confidence_scores_written(
-        self, tmp_path, output_fmt, dummy_confidence_scores
+        self, tmp_path, output_fmt, output_dtype, dummy_confidence_scores
     ):
         self.write_confidence_scores(
-            tmp_path, output_fmt, True, dummy_confidence_scores
+            tmp_path, output_fmt, output_dtype, True, dummy_confidence_scores
         )
 
         output_prefix = tmp_path / "test"
@@ -175,12 +181,18 @@ class TestPredictionWriter:
 
         for k in expected_full_scores:
             assert k in actual_full_scores, f"Key {k} not found in actual scores"
-            np.testing.assert_array_equal(
-                expected_full_scores[k], actual_full_scores[k]
+            np.testing.assert_array_almost_equal(
+                expected_full_scores[k], actual_full_scores[k], decimal=3
             )
+            if output_fmt == "npz":
+                assert actual_full_scores[k].dtype == np.dtype(output_dtype), (
+                    f"Expected dtype {output_dtype} for {k}, but got {actual_full_scores[k].dtype}"
+                )
 
     def test_skip_full_confidence_scores(self, tmp_path, dummy_confidence_scores):
-        self.write_confidence_scores(tmp_path, "json", False, dummy_confidence_scores)
+        self.write_confidence_scores(
+            tmp_path, "json", "float32", False, dummy_confidence_scores
+        )
         expected_output_contents = [tmp_path / "test_confidences_aggregated.json"]
         actual_output_contents = [f for f in tmp_path.glob("*")]
         assert expected_output_contents == actual_output_contents, (
