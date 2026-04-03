@@ -41,9 +41,10 @@ To make a contribution, you should first set up your repository, then submit a p
       ```
       pytest openfold3/tests/*
       ```
+   3. If you are adding a new feature, consider adding documentation. It can help make your feature more discoverable.. If you are unsure where to place the documentation, the core team can provide suggestions during review.
    ::::
 
-4. Format the changes. In the OpenFold project, we use Ruff as our Linting tool. You can run ruff in the same environment with.
+4. Format the changes. In the OpenFold project, we use Ruff as our Linting tool. You can run Ruff in the same environment with.
 
     ```shell
     ruff format && ruff check --fix
@@ -59,7 +60,7 @@ To make a contribution, you should first set up your repository, then submit a p
 
 We recognize that LLMs and coding agents can provide benefits in terms of speed of code development. 
 
-OpenFold has a small core development team, with finite time for code review and issue responses. As such, we want to ensure that contributions we receive are of high quality and promote the development of the OpenFold community
+OpenFold has a small core development team, with finite time for code review and issue responses. As such, we want to ensure that contributions we receive are of high quality and promote the development of the OpenFold community.
 
 To help us conserve our resources, we ask contributors to meet coding standards and engage fully in code reviews. The following guidelines are some steps towards this goal. As the field of AI contribution develops, we may review and edit these guidelines.
 
