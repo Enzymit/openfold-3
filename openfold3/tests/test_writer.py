@@ -23,6 +23,7 @@ from biotite.structure.io import pdb, pdbx
 
 from openfold3.core.runners.writer import OF3OutputWriter
 
+
 @pytest.fixture(params=[np.float16, np.float32])
 def dummy_confidence_scores(request):
     dtype = request.param
