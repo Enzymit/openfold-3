@@ -23,14 +23,14 @@ from biotite.structure.io import pdb, pdbx
 
 from openfold3.core.runners.writer import OF3OutputWriter
 
-
-@pytest.fixture
-def dummy_confidence_scores():
+@pytest.fixture(params=[np.float16, np.float32])
+def dummy_confidence_scores(request):
+    dtype = request.param
     n_tokens = 3
     n_atoms = 5
 
     def rand(*shape):
-        return np.random.uniform(size=shape).astype(np.float32)
+        return np.random.uniform(size=shape).astype(dtype)
 
     return {
         "plddt": rand(n_atoms),
@@ -42,7 +42,7 @@ def dummy_confidence_scores():
         "iptm": rand(1),
         "ptm": rand(1),
         "disorder": rand(1),
-        "has_clash": np.float32(0.0),
+        "has_clash": np.dtype(dtype).type(0.0),
         "sample_ranking_score": rand(1),
         "chain_ptm": {
             "1": rand(1),
@@ -144,14 +144,12 @@ class TestPredictionWriter:
             confidence_scores, atom_array, output_prefix
         )
 
-    @pytest.mark.parametrize(
-        "output_fmt, output_dtype",
-        [("json", "float32"), ("npz", "float32"), ("npz", "float16")],
-        ids=lambda x: x,
-    )
+    @pytest.mark.parametrize("output_fmt", ["json", "npz"], ids=lambda x: x)
     def test_full_confidence_scores_written(
-        self, tmp_path, output_fmt, output_dtype, dummy_confidence_scores
+        self, tmp_path, output_fmt, dummy_confidence_scores
     ):
+        # infer the dtype from the dummy_confidence_scores fixture
+        output_dtype = dummy_confidence_scores["plddt"].dtype.name
         self.write_confidence_scores(
             tmp_path, output_fmt, output_dtype, True, dummy_confidence_scores
         )
@@ -183,9 +181,9 @@ class TestPredictionWriter:
         }
         actual_full_scores = self._load_full_confidence_scores(out_file_full)
 
+        expected_decimal = 3 if output_dtype == "float16" else 6
         for k in expected_full_scores:
             assert k in actual_full_scores, f"Key {k} not found in actual scores"
-            expected_decimal = 3 if output_dtype == "float16" else 6
             np.testing.assert_array_almost_equal(
                 expected_full_scores[k], actual_full_scores[k], decimal=expected_decimal
             )
