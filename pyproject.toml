@@ -95,7 +95,7 @@ cuequivariance = [
 ]
 
 [tool.setuptools_scm]
-fallback_version = "0.0.0"
+fallback_version = "0.4.1-dev"
 
 [tool.setuptools]
 include-package-data = true
