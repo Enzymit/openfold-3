@@ -74,6 +74,7 @@ RUN mkdir -p /workspace/inputs /workspace/openfold3_outputs
 ENV OPENFOLD_CACHE=/opt/openfold_cache
 # setup_openfold is interactive; feed cache dir, params dir, and skip tests.
 RUN mkdir -p "${OPENFOLD_CACHE}" \
-    && printf '%s\n%s\nno\n' "${OPENFOLD_CACHE}" "${OPENFOLD_CACHE}" | setup_openfold
+    && printf '%s\n%s\n1\nno\n' "${OPENFOLD_CACHE}" "${OPENFOLD_CACHE}" | setup_openfold
+
 
 WORKDIR /workspace
