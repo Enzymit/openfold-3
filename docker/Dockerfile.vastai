@@ -1,0 +1,78 @@
+# OpenFold3 image for VastAI (single-stage)
+FROM vastai/base-image:cuda-12.4.1-auto
+ARG BUILD_MODE=yaml
+ARG INSTALL_CUEQ=false
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Keep base conda in path, but we will activate the env in bashrc
+ENV PATH=/opt/conda/bin:$PATH
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    libopenmpi-dev \
+    libaio-dev \
+    libopenmpi3 \
+    libaio1 \
+    git \
+    python3-dbg \
+    build-essential \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+
+RUN wget -P /tmp \
+    https://github.com/conda-forge/miniforge/releases/download/25.11.0-1/Miniforge3-Linux-x86_64.sh \
+    && bash /tmp/Miniforge3-Linux-x86_64.sh -b -p /opt/conda \
+    && rm /tmp/Miniforge3-Linux-x86_64.sh
+
+COPY environments/production-linux-64.lock /opt/openfold3/production-linux-64.lock
+COPY environments/production-linux-64.yml /opt/openfold3/production-linux-64.yml
+
+RUN mamba install -n base -c conda-forge conda-lock --yes \
+    && if [ "$BUILD_MODE" = "lock" ]; then \
+         conda-lock install --prefix /opt/conda/envs/openfold3 /opt/openfold3/production-linux-64.lock; \
+       elif [ "$BUILD_MODE" = "yaml" ]; then \
+         mamba env create -f /opt/openfold3/production-linux-64.yml --prefix /opt/conda/envs/openfold3; \
+       else \
+         echo "Invalid BUILD_MODE: $BUILD_MODE. Use 'lock' or 'yaml'." && exit 1; \
+       fi \
+    && mamba clean --all --yes \
+    && conda clean --all --yes
+
+# DO NOT set LD_LIBRARY_PATH here globally. 
+# It breaks system binaries like sshd.
+ENV CONDA_PREFIX=/opt/conda/envs/openfold3
+ENV CONDA_DEFAULT_ENV=openfold3
+# Add the env bin to PATH, but AFTER the system paths to be safe for services
+ENV PATH=$PATH:/opt/conda/envs/openfold3/bin
+
+COPY pyproject.toml /opt/openfold3/
+COPY openfold3/ /opt/openfold3/openfold3/
+COPY scripts/ /opt/openfold3/scripts/
+WORKDIR /opt/
+RUN /opt/openfold3/scripts/install_third_party_dependencies.sh
+
+WORKDIR /opt/openfold3
+RUN if [ "$INSTALL_CUEQ" = "true" ]; then \
+        uv pip install --no-build-isolation --editable ".[cuequivariance]"; \
+    else \
+        uv pip install --no-deps --editable .; \
+    fi
+
+ENV TORCH_CUDA_ARCH_LIST="8.0;8.6;9.0"
+
+# This ensures that when you SSH in, the environment is fully loaded
+RUN /opt/conda/bin/conda init bash \
+    && echo "conda activate openfold3" >> /root/.bashrc
+
+ENV CUTLASS_PATH=/opt/cutlass
+ENV KMP_AFFINITY=none
+
+WORKDIR /opt/openfold3
+RUN mkdir -p /workspace/inputs /workspace/openfold3_outputs
+
+ENV OPENFOLD_CACHE=/opt/openfold_cache
+RUN mkdir -p "${OPENFOLD_CACHE}" \
+    && bash /opt/openfold3/openfold3/scripts/download_openfold3_params.sh --download_dir="${OPENFOLD_CACHE}"
+
+WORKDIR /workspace
