@@ -128,7 +128,9 @@ class TestInferenceRun(unittest.TestCase):
                             "No checkpoint files found, skipping for now. "
                             "Please use scripts/setup_openfold3.sh to download the weights."
                         )
-                        raise unittest.SkipTest("No checkpoint files available") from None
+                        raise unittest.SkipTest(
+                            "No checkpoint files available"
+                        ) from None
                 else:
                     raise e from e
 
