@@ -146,6 +146,14 @@ def train(runner_yaml: Path, seed: int | None = None, data_seed: int | None = No
     required=False,
     help="Output directory for writing results",
 )
+@click.option(
+    "--preprocess-timeout",
+    "--preprocess_timeout",
+    type=int,
+    default=60,
+    required=False,
+    help="Change default 60 seconds for pre-processing",
+)
 def predict(
     query_json: Path,
     inference_ckpt_path: Path | None = None,
@@ -156,6 +164,7 @@ def predict(
     use_msa_server: bool = True,
     use_templates: bool = True,
     output_dir: Path | None = None,
+    preprocess_timeout: int = 60,
 ):
     """Perform inference on a set of queries defined in the query_json."""
     _torch_gpu_setup()
@@ -178,6 +187,7 @@ def predict(
         inference_ckpt_name=inference_ckpt_name,
         **runner_args,
     )
+    expt_config.template_preprocessor_settings.preprocess_timeout = preprocess_timeout
     expt_runner = InferenceExperimentRunner(
         expt_config,
         num_diffusion_samples,
