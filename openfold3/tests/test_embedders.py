@@ -24,6 +24,7 @@ from openfold3.core.model.feature_embedders.input_embedders import (
 from openfold3.core.model.feature_embedders.template_embedders import (
     TemplatePairEmbedderAllAtom,
 )
+from openfold3.core.model.latent.template_module import TemplateEmbedderAllAtom
 from openfold3.projects.of3_all_atom.project_entry import OF3ProjectEntry
 from openfold3.tests.config import consts
 from openfold3.tests.data_utils import random_asym_ids, random_of3_features
@@ -140,22 +141,12 @@ class TestMSAModuleEmbedder:
                 )
 
 
-class TestTemplatePairEmbedders:
-    def test_all_atom(self):
+class TestTemplateEmbedders:
+    @pytest.fixture
+    def template_batch(self):
         batch_size = 2
         n_templ = 3
         n_token = 10
-
-        proj_entry = OF3ProjectEntry()
-        of3_config = proj_entry.get_model_config_with_presets()
-
-        c_in = of3_config.architecture.template.template_pair_embedder.c_in
-        c_t = of3_config.architecture.template.template_pair_embedder.c_out
-
-        tpe = TemplatePairEmbedderAllAtom(
-            **of3_config.architecture.template.template_pair_embedder
-        )
-
         batch = {
             "asym_id": torch.ones((batch_size, n_token)),
             "template_restype": torch.ones((batch_size, n_templ, n_token, 32)),
@@ -168,13 +159,55 @@ class TestTemplatePairEmbedders:
                 (batch_size, n_templ, n_token, n_token, 3)
             ),
         }
+        return {"batch_size": batch_size, "n_templ": n_templ, "n_token": n_token, "batch": batch}
+
+    def test_template_pair_embedder_all_atom(self, template_batch):
+        batch_size = template_batch["batch_size"]
+        n_templ = template_batch["n_templ"]
+        n_token = template_batch["n_token"]
+        batch = template_batch["batch"]
+
+        proj_entry = OF3ProjectEntry()
+        of3_config = proj_entry.get_model_config_with_presets()
+
+        c_in = of3_config.architecture.template.template_pair_embedder.c_in
+        c_t = of3_config.architecture.template.template_pair_embedder.c_out
+
+        tpe = TemplatePairEmbedderAllAtom(
+            **of3_config.architecture.template.template_pair_embedder
+        )
 
         z = torch.ones((batch_size, n_token, n_token, c_in))
 
         emb = tpe(batch, z)
 
         assert emb.shape == (batch_size, n_templ, n_token, n_token, c_t)
+    
+    def test_template_module_offload(self, template_batch):
+        batch_size = template_batch["batch_size"]
+        n_token = template_batch["n_token"]
+        batch = template_batch["batch"]
 
+        proj_entry = OF3ProjectEntry()
+        of3_config = proj_entry.get_model_config_with_presets()
+
+        c_in = of3_config.architecture.template.template_pair_embedder.c_in
+
+        embedder = TemplateEmbedderAllAtom(of3_config.architecture.template)
+        embedder.eval()
+
+        z = torch.ones((batch_size, n_token, n_token, c_in))
+        pair_mask = torch.ones((batch_size, n_token, n_token))
+
+        with torch.no_grad():
+            t_no_offload = embedder(
+                batch=batch, z=z, pair_mask=pair_mask, offload_inference=False
+            )
+            t_offload = embedder(
+                batch=batch, z=z, pair_mask=pair_mask, offload_inference=True
+            )
+
+        assert torch.allclose(t_no_offload, t_offload)
 
 if __name__ == "__main__":
     unittest.main()
