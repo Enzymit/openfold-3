@@ -1798,7 +1798,7 @@ class TemplatePreprocessor:
             func_timeout(
                 self.preprocess_timeout,
                 self._preprocess_templates_for_query,
-                args=(input_data,)
+                args=(input_data,),
             )
         except FunctionTimedOut:
             print(
