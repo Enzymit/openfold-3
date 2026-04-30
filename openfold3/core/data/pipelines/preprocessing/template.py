@@ -1795,7 +1795,11 @@ class TemplatePreprocessor:
         input_data: TemplatePreprocessorInputTrain | TemplatePreprocessorInputInference,
     ) -> None:
         try:
-            func_timeout(self.preprocess_timeout, self._preprocess_templates_for_query, args=(input_data,))
+            func_timeout(
+                self.preprocess_timeout,
+                self._preprocess_templates_for_query,
+                args=(input_data,)
+            )
         except FunctionTimedOut:
             print(
                 f"\n Template preprocessing TIMED OUT after {self.preprocess_timeout}s "
