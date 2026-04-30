@@ -1,4 +1,4 @@
-# Copyright 2025 AlQuraishi Laboratory
+# Copyright 2026 AlQuraishi Laboratory
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -410,6 +410,7 @@ class DatasetCache:
 
     _registered = False
     _format_validated: bool = False
+    _lmdb_env = None  # set by from_lmdb; LMDB forbids multiple opens per directory
 
     # TODO: update parsers for this base class
     @classmethod
@@ -538,11 +539,13 @@ class DatasetCache:
                 lmdb_env, str_encoding, reference_molecule_data_encoding
             )
 
-            return cls(
-                name=name,
-                structure_data=structure_data,
-                reference_molecule_data=reference_molecule_data,
-            )
+        instance = cls(
+            name=name,
+            structure_data=structure_data,
+            reference_molecule_data=reference_molecule_data,
+        )
+        instance._lmdb_env = lmdb_env
+        return instance
 
     def _parse_type_lmdb(
         transaction: lmdb.Transaction, str_encoding: Literal["utf-8", "pkl"]
@@ -753,6 +756,10 @@ class ValidationDatasetChainData(ClusteredDatasetChainData):
             selected for metrics) subset in the validation set construction (see SI
             5.8). This is mostly for debugging / informative purposes and not required
             by the model.
+        sabdab_annotation (Literal["AB-H", "AB-L", "AG"] | None):
+            Indicates whether this chain is annotated in SAbDab as an antibody heavy
+            chain ("AB-H"), antibody light chain ("AB-L"), or antigen ("AG"). Only
+            applies to antibody-antigen complexes.
     """
 
     # Adds the following fields:
@@ -761,6 +768,7 @@ class ValidationDatasetChainData(ClusteredDatasetChainData):
     use_metrics: bool
     ranking_model_fit: float | None
     source_subset: Literal["monomer", "multimer", "base"] | None
+    sabdab_annotation: Literal["AB-H", "AB-L", "AG"] | None = None
 
 
 @dataclass
@@ -769,6 +777,14 @@ class ProteinMonomerChainData:
 
     alignment_representative_id: str | None
     template_ids: list[str] | None
+    index: int
+
+
+@dataclass
+class RNAMonomerChainData:
+    """Chain-wise data for protein monomers."""
+
+    alignment_representative_id: str | None
     index: int
 
 
@@ -817,7 +833,7 @@ class ClusteredDatasetStructureData:
     """Structure data with clusters and added metadata."""
 
     release_date: datetime.date
-    resolution: float
+    resolution: float | None
     chains: dict[str, ClusteredDatasetChainData]
     interfaces: dict[str, ClusteredDatasetInterfaceData]
 
@@ -827,7 +843,7 @@ class ValidationDatasetStructureData:
     """Structure data wrapper for validation set."""
 
     release_date: datetime.date
-    resolution: float
+    resolution: float | None
     token_count: int
     chains: dict[str, ValidationDatasetChainData]
     interfaces: dict[str, ClusteredDatasetInterfaceData]
@@ -840,6 +856,13 @@ class ProteinMonomerStructureData:
     chains: dict[str, ProteinMonomerChainData]
 
 
+@dataclass
+class RNAMonomerStructureData:
+    """Structure data for protein monomers."""
+
+    chains: dict[str, RNAMonomerChainData]
+
+
 ClusteredDatasetStructureDataCache: TypeAlias = DictOrLMDBDict[
     str, ClusteredDatasetStructureData
 ]
@@ -849,6 +872,7 @@ ValClusteredDatasetStructureDataCache: TypeAlias = DictOrLMDBDict[
 ProteinMonomerStructureDataCache: TypeAlias = DictOrLMDBDict[
     str, ProteinMonomerStructureData
 ]
+RNAMonomerStructureDataCache: TypeAlias = DictOrLMDBDict[str, RNAMonomerStructureData]
 
 
 # --- Reference molecule dataclasses ---
@@ -938,14 +962,52 @@ class ProteinMonomerDatasetCache(DatasetCache):
         return structure_data
 
 
+@register_datacache
+@dataclass
+class RNAMonomerDatasetCache(DatasetCache):
+    """Full data cache for protein monomer data from AF2."""
+
+    name: str
+    structure_data: RNAMonomerStructureDataCache
+    reference_molecule_data: DatasetReferenceMoleculeCache
+    _chain_data_format = RNAMonomerChainData
+    _ref_mol_data_format = DatasetReferenceMoleculeData
+    _structure_data_format = RNAMonomerStructureData
+
+    @classmethod
+    def _parse_structure_data_json(cls, data: dict) -> dict:
+        # Format structure data
+        structure_data = {}
+        for pdb_id, per_structure_data in data["structure_data"].items():
+            chain_data = per_structure_data.pop("chains")
+
+            # Extract all chain data into respective chain data format
+            chains = {
+                chain_id: cls._chain_data_format(**chain_data[chain_id])
+                for chain_id in chain_data
+            }
+
+            # Combine chain and interface data with remaining structure data
+            structure_data[pdb_id] = cls._structure_data_format(
+                chains=chains, **per_structure_data
+            )
+        return structure_data
+
+
 # Grouped type-aliases for more convenient type-hinting of general-purpose functions
-ChainData: TypeAlias = PreprocessingChainData | PDBChainData | ProteinMonomerChainData
+ChainData: TypeAlias = (
+    PreprocessingChainData
+    | PDBChainData
+    | ProteinMonomerChainData
+    | RNAMonomerChainData
+)
 StructureDataCache: TypeAlias = (
     PreprocessingStructureDataCache
     | DisorderedPreprocessingStructureDataCache
     | ClusteredDatasetStructureDataCache
     | ValClusteredDatasetStructureDataCache
     | ProteinMonomerStructureDataCache
+    | RNAMonomerStructureDataCache
 )
 ReferenceMoleculeCache: TypeAlias = (
     PreprocessingReferenceMoleculeCache | DatasetReferenceMoleculeCache
