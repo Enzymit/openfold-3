@@ -1,6 +1,7 @@
 # OpenFold3 image for VastAI (single-stage)
 FROM vastai/base-image:cuda-12.4.1-auto
-ARG BUILD_MODE=yaml
+#ARG BUILD_MODE=yaml
+ARG BUILD_MODE=lock
 ARG INSTALL_CUEQ=false
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -59,7 +60,7 @@ RUN if [ "$INSTALL_CUEQ" = "true" ]; then \
         uv pip install --no-deps --editable .; \
     fi
 
-ENV TORCH_CUDA_ARCH_LIST="8.0;8.6;9.0"
+ENV TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0"
 
 # This ensures that when you SSH in, the environment is fully loaded
 RUN /opt/conda/bin/conda init bash \
