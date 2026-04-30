@@ -249,9 +249,7 @@ class TestMSAModuleStack:
         stack.eval()
 
         with torch.no_grad():
-            z_no_offload = stack(
-                m=m, z=z, msa_mask=msa_mask, pair_mask=pair_mask
-            )
+            z_no_offload = stack(m=m, z=z, msa_mask=msa_mask, pair_mask=pair_mask)
             # Clone the input tensors since forward_offload will modify them in-place
             z_offload = stack.forward_offload(
                 input_tensors=[m.clone(), z.clone()],
