@@ -77,14 +77,15 @@ ENV OPENFOLD_CACHE=/opt/openfold_cache
 RUN mkdir -p "${OPENFOLD_CACHE}" \
     && printf '%s\n%s\n1\nno\n' "${OPENFOLD_CACHE}" "${OPENFOLD_CACHE}" | setup_openfold
 
-# Prefer host-mounted NVIDIA driver libraries over any CUDA compat shims.
-ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/opt/conda/envs/openfold3/lib
+# Prefer host-mounted NVIDIA driver libraries without exposing conda libraries to
+# system services such as sshd.
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 
 # Fail fast if CUDA is broken on the rented host.
 RUN printf '%s\n' \
 '#!/usr/bin/env bash' \
 'set -euo pipefail' \
-'python - <<PY' \
+'/opt/conda/envs/openfold3/bin/python - <<PY' \
 'import torch' \
 'print("torch", torch.__version__)' \
 'print("torch cuda", torch.version.cuda)' \
