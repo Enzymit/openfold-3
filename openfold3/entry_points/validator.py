@@ -110,7 +110,11 @@ class DataModuleArgs(BaseModel):
     batch_size: int = 1
     data_seed: int | None = None
     num_workers: int = 10
+    prefetch_factor: int | None = None
     num_workers_validation: int = 4
+    prefetch_factor_validation: int | None = None
+    multiprocessing_context: str | None = "openfold-default"
+    persistent_workers: bool = False
     epoch_len: int = 4
 
 
@@ -264,8 +268,8 @@ class InferenceExperimentSettings(ExperimentSettings):
     mode: ValidModeType = "predict"
     seeds: int | list[int] = [42]
     num_seeds: int | None = None
-    use_msa_server: bool = False
-    use_templates: bool = False
+    use_msa_server: bool = True
+    use_templates: bool = True
     skip_existing: bool = False
 
     @model_validator(mode="after")

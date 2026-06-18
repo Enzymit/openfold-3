@@ -112,6 +112,12 @@ def query_colabfold_msa_server(
 
     submission_endpoint = "ticket/pair" if use_pairing else "ticket/msa"
 
+    # Normalize the host: a pydantic Url stringifies with a trailing slash, which
+    # would produce a doubled slash (e.g. ".../com//ticket/msa") in the f-strings
+    # below. The server 301-redirects the doubled slash, and requests downgrades
+    # the POST to GET while dropping the body, yielding a misleading "invalid ID".
+    host_url = str(host_url).rstrip("/")
+
     headers = {}
     if user_agent != "":
         headers["User-Agent"] = user_agent
@@ -947,7 +953,7 @@ def add_msa_paths_to_iqs(
 
                 if chain.main_msa_file_paths is not None:
                     warnings.warn(
-                        f"Query {query_name} chain {chain} already has "
+                        f"Query {query_name} chain {chain.chain_ids} already has "
                         "main_msa_file_paths set. These are now overwritten "
                         "with path(s) to the ColabFold MSAs.",
                         stacklevel=2,
@@ -976,13 +982,22 @@ def add_msa_paths_to_iqs(
 
                     if chain.paired_msa_file_paths is not None:
                         warnings.warn(
-                            f"Query {query_name} chain {chain} already has "
+                            f"Query {query_name} chain {chain.chain_ids} already has "
                             "paired_msa_file_paths set. These are now "
                             "overwritten with path(s) to the ColabFold MSAs.",
                             stacklevel=2,
                         )
                     chain.paired_msa_file_paths = [paired_msa_file_paths]
 
+                if chain.template_cif_paths is not None:
+                    warnings.warn(
+                        f"Query {query_name} chain {chain.chain_ids} already has "
+                        "template_cif_paths set. These are not overwritten with "
+                        "path(s) to the template CIF files from the "
+                        "ColabFold MSA server.",
+                        stacklevel=2,
+                    )
+                    continue
                 # Add template alignment file paths
                 template_alignment_file_path = (
                     output_directory
@@ -1131,6 +1146,16 @@ def preprocess_colabfold_msas(
     # Save mappings to file
     if compute_settings.save_mappings:
         save_colabfold_mappings(colabfold_mapper, output_directory)
+
+    # Abort early if a stale raw directory exists — it contains unvalidated
+    # out.tar.gz files that would be silently reused for the wrong query.
+    raw_dir = output_directory / "raw"
+    if raw_dir.exists():
+        raise FileExistsError(
+            f"ColabFold raw directory already exists: {raw_dir}\n"
+            "This is likely left over from a previous failed run. "
+            "Please remove it before starting a new run."
+        )
 
     # Run batch queries for main and paired MSAs
     colabfold_query_runner = ColabFoldQueryRunner(
