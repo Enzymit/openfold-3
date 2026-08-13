@@ -215,6 +215,12 @@ The model parameters section of the configuration may by passing an update in th
 
 Note that CLI arguments take precedence over configuration file settings.
 
+#### 🏠 Persistent User-Default Configuration
+
+OpenFold3 automatically searches for a base `runner.yml` at `$OPENFOLD_CACHE/runner.yml` (defaults to `~/.openfold3/runner.yml`). If found, it applies these settings globally without requiring the `--runner-yaml` flag.
+
+*Note: The path of the loaded default configuration is tracked in `experiment_config.json` under `"user_default_runner_yaml_path"`.*
+
 Below we'll walk through some of the most common configuration scenarios and how to implement them:
 
 
@@ -458,6 +464,19 @@ Choose the file format for saving MSAs retrieved from ColabFold:
 ```yaml
 msa_computation_settings:
   msa_file_format: a3m     # Options: a3m, npz (default: npz)
+```
+
+(35-using-pocket-constraints)=
+### 3.5 Using Pocket Constraints
+
+Use Pocket Constraints to guide ligand binding in the pocket during inference time using directed diffusion seeds. See {ref}`Section 4 of the input format reference <4-pocket-constraints>` for more information on how to specify a pocket constraint.
+
+Pocket Constraints can be enabled / disabled using the following runner yaml settings. Other settings such as the amount of jitter and conformer settings may also be tuned, please see the {ref}`Pocket Sampling Settings reference <full-ref-pocket-sampling-settings>`.
+
+```yaml
+datset_config_kwargs:
+  pocket_sampling:
+    enabled: True  # default
 ```
 
 ## 4. Model Outputs
